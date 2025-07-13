@@ -1,0 +1,80 @@
+version: "3.9"
+
+services:
+  postgres_db:
+    image: postgres:15
+    container_name: postgres_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: harif313
+      POSTGRES_DB: crm_db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  fastapi:
+    build: .
+    container_name: fastapi_app
+    command: uvicorn crm_backend.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - .:/code
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://postgres:harif313@postgres_db:5432/crm_db
+    depends_on:
+      postgres_db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_worker:
+    build: .
+    container_name: celery_worker
+    command: celery -A crm_backend.celery_app.celery worker --loglevel=info
+    volumes:
+      - .:/code
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://postgres:harif313@postgres_db:5432/crm_db
+    depends_on:
+      postgres_db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_beat:
+    build: .
+    container_name: celery_beat
+    command: celery -A crm_backend.celery_app.celery beat --loglevel=info
+    volumes:
+      - .:/code
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://postgres:harif313@postgres_db:5432/crm_db
+    depends_on:
+      postgres_db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
