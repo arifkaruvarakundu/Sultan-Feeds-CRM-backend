@@ -53,6 +53,11 @@ class Order(Base):
     created_at = Column(DateTime, index=True, nullable=False)
     payment_method = Column(String, nullable=True)
 
+    attribution_referrer = Column(String, nullable=True)
+    session_pages = Column(Integer, nullable=True)
+    session_count = Column(Integer, nullable=True)
+    device_type = Column(String, nullable=True)
+
     customer = relationship("Customer", back_populates="orders", passive_deletes=True)
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
 
@@ -76,7 +81,6 @@ class Product(Base):
     # ✅ Relationship back to OrderItem
     order_items = relationship("OrderItem", back_populates="product")
 
-
 class OrderItem(Base):
     __tablename__ = "order_items"
 
@@ -91,3 +95,8 @@ class OrderItem(Base):
     
     # ✅ Relationship to Product
     product = relationship("Product", back_populates="order_items")
+
+class SyncState(Base):
+    __tablename__ = "sync_state"
+    key = Column(String, primary_key=True)
+    value = Column(String)

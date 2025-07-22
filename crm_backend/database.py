@@ -20,7 +20,6 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # 🚀 THIS creates the tables if they don't exist
 # Base.metadata.create_all(bind=engine)
 
-
 # ✅ Add this missing function
 def get_db():
     db = SessionLocal()

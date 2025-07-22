@@ -1,6 +1,6 @@
 import httpx
 from sqlalchemy.orm import Session
-from crm_backend.models import Customer, Address, Order, OrderItem, Product
+from crm_backend.models import Customer, Address, Order, OrderItem, Product, SyncState
 from datetime import datetime, timezone
 import os
 from dotenv import load_dotenv
@@ -51,6 +51,84 @@ def normalize_existing_phones(db: Session) -> None:
     if updated:
         db.commit()
 
+def get_last_synced_time(db: Session) -> str:
+    state = db.query(SyncState).filter_by(key="last_order_sync").first()
+    return state.value if state else "2000-01-01T00:00:00Z"
+
+def set_last_synced_time(db: Session, timestamp: str) -> None:
+    state = db.query(SyncState).filter_by(key="last_order_sync").first()
+    if state:
+        state.value = timestamp
+    else:
+        db.add(SyncState(key="last_order_sync", value=timestamp))
+    db.commit()
+
+def update_orders_from_api(db: Session, api_data: list):
+    for order_data in api_data:
+        order_key = order_data.get("order_key")
+        status = order_data.get("status")
+        meta = {meta["key"]: meta["value"] for meta in order_data.get("meta_data", [])}
+
+        # Extract values from meta
+        attribution_referrer = meta.get("_wc_order_attribution_referrer")
+        session_pages = meta.get("_wc_order_attribution_session_pages")
+        session_count = meta.get("_wc_order_attribution_session_count")
+        device_type = meta.get("_wc_order_attribution_device_type")
+
+        # Convert types if needed (some may come as strings)
+        try:
+            session_pages = int(session_pages) if session_pages is not None else None
+        except ValueError:
+            session_pages = None
+
+        try:
+            session_count = int(session_count) if session_count is not None else None
+        except ValueError:
+            session_count = None
+
+        # Find order in DB
+        order = db.query(Order).filter(Order.order_key == order_key).first()
+        if not order:
+            continue  # Skip if order not found
+
+        # Update order fields
+        order.status = status
+        order.attribution_referrer = attribution_referrer
+        order.session_pages = session_pages
+        order.session_count = session_count
+        order.device_type = device_type
+
+    db.commit()
+
+def backfill_existing_orders(db: Session):
+    orders = db.query(Order).all()
+
+    for order in orders:
+        print(f"Backfilling order: {order.external_id}")
+        # Fetch from API
+        url = f"{WC_BASE_URL}/{order.external_id}"
+        try:
+            with httpx.Client() as client:
+                response = client.get(url, auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET))
+            if response.status_code != 200:
+                print(f"Failed to fetch order {order.external_id}: {response.text}")
+                continue
+
+            data = response.json()
+            meta = {m["key"]: m["value"] for m in data.get("meta_data", [])}
+
+            order.attribution_referrer = meta.get("_wc_order_attribution_referrer")
+            order.session_pages = int(meta.get("_wc_order_attribution_session_pages", 0))
+            order.session_count = int(meta.get("_wc_order_attribution_session_count", 0))
+            order.device_type = meta.get("_wc_order_attribution_device_type")
+
+        except Exception as e:
+            print(f"Error updating order {order.external_id}: {e}")
+            continue
+
+    db.commit()
+    print("✅ Finished backfilling existing orders.")
+
 def fetch_and_save_orders(db: Session) -> None:
     """Fetch new WooCommerce orders since last sync and save to the database."""
     print(f"[DB INFO] Connected to: {db.bind.url}")
@@ -60,7 +138,9 @@ def fetch_and_save_orders(db: Session) -> None:
     page = 1
     latest_order = db.query(Order).order_by(Order.created_at.desc()).first()
     after_date = latest_order.created_at.isoformat() if latest_order else "2000-01-01T00:00:00Z"
-    # after_date = "2025-07-07T11:55:13"
+    # after_date = get_last_synced_time(db)
+    # after_date = get_last_synced_time(db)
+    # first_sync = after_date == "2000-01-01T00:00:00Z"
     print(f"Fetching orders created after {after_date}")
 
     while True:
@@ -123,8 +203,14 @@ def fetch_and_save_orders(db: Session) -> None:
                     )
                     db.add(address)
 
-                if db.query(Order).filter_by(order_key=data["order_key"]).first():
-                    continue  # Skip if order exists
+                order_in_db = db.query(Order).filter_by(order_key=data["order_key"]).first()
+                if order_in_db:
+                    # Update existing order with new metadata
+                    update_orders_from_api(db, [data])
+                    continue  # Don't re-insert
+
+                meta = data.get("meta_data", [])
+                meta_dict = {entry.get("key"): entry.get("value") for entry in meta}
 
                 order = Order(
                     order_key=data["order_key"],
@@ -133,7 +219,11 @@ def fetch_and_save_orders(db: Session) -> None:
                     status=data["status"],
                     total_amount=float(data["total"]),
                     created_at=isoparse(data["date_created"]),
-                    payment_method=data.get("payment_method_title")
+                    payment_method=data.get("payment_method_title"),
+                    attribution_referrer=meta_dict.get("_wc_order_attribution_referrer"),
+                    session_pages=int(meta_dict.get("_wc_order_attribution_session_pages", 0)),
+                    session_count=int(meta_dict.get("_wc_order_attribution_session_count", 0)),
+                    device_type=meta_dict.get("_wc_order_attribution_device_type")
                 )
                 db.add(order)
                 db.flush()
@@ -152,6 +242,12 @@ def fetch_and_save_orders(db: Session) -> None:
                     db.add(order_item)
             db.commit()
             print(f"Committed page {page}")
+            
+            # # ✅ Update sync timestamp
+            if first_sync and orders:
+                last_order_created = max(isoparse(order["date_created"]) for order in orders)
+                set_last_synced_time(db, last_order_created.isoformat())
+
         except Exception as e:
             db.rollback()
             print(f"❌ Failed to save orders from page {page}: {e}")

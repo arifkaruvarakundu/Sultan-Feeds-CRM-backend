@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from crm_backend.models import *
 from typing import List, Dict
-from sqlalchemy import func, desc, text
+from sqlalchemy import func, extract, cast, Date, desc, text
 from datetime import date, timedelta, datetime
 
 def get_latest_orders_data(db: Session) -> List[dict]:
@@ -36,9 +36,11 @@ def get_total_orders_count_data(db:Session) -> List[dict]:
 
 
 def get_total_sales_data(db: Session) -> List[dict]:
-    total_sales = db.query(func.coalesce(func.sum(Order.total_amount), 0.0))\
-                    .filter(Order.status == "completed")\
-                    .scalar()
+    total_sales = (
+        db.query(func.coalesce(func.sum(Order.total_amount), 0.0))
+        .filter(Order.status.in_(["processing", "completed"]))  # Include both statuses
+        .scalar()
+    )
 
     return [
         {
@@ -49,7 +51,7 @@ def get_total_sales_data(db: Session) -> List[dict]:
 
 def get_average_order_value_data(db: Session) -> List[dict]:
     total_sales = db.query(func.coalesce(func.sum(Order.total_amount), 0.0))\
-                    .filter(Order.status == "completed")\
+                    .filter(Order.status.in_(["processing", "completed"]))\
                     .scalar()
 
     completed_order_count = db.query(func.count(Order.id))\
@@ -151,8 +153,82 @@ def get_sales_comparison_data(db: Session) -> dict:
         "previousMonth": [{"day": int(row.day), "total": float(row.total)} for row in prev_sales]
     }
 
+def get_orders_in_range_data(db: Session, start_date: str, end_date: str, granularity: str = "daily"):
+    """
+    Get total order amount grouped by date/month/year depending on granularity.
+    """
+    base_query = db.query(Order).filter(
+        Order.created_at >= start_date,
+        Order.created_at <= end_date,
+        Order.status.in_(['completed', 'processing'])
+    )
 
+    if granularity == "daily":
+        query = base_query.with_entities(
+            func.date(Order.created_at).label('date'),
+            func.sum(Order.total_amount).label('total_amount')
+        ).group_by(func.date(Order.created_at)).order_by(func.date(Order.created_at))
 
+    elif granularity == "monthly":
+        query = base_query.with_entities(
+            func.date(Order.created_at).label('date'),
+            func.sum(Order.total_amount).label('total_amount')
+        ).group_by(func.date(Order.created_at)).order_by(func.date(Order.created_at))
 
+    elif granularity == "yearly":
+        query = base_query.with_entities(
+            func.to_char(Order.created_at, 'YYYY-MM').label('date'),
+            func.sum(Order.total_amount).label('total_amount')
+        ).group_by(func.to_char(Order.created_at, 'YYYY-MM')).order_by(func.to_char(Order.created_at, 'YYYY-MM'))
 
+    else:
+        raise ValueError("Invalid granularity")
 
+    results = query.all()
+
+    return [
+        {
+            "date": str(row.date),
+            "total_amount": round(float(row.total_amount), 3)
+        }
+        for row in results
+    ]
+
+def get_orders_data(db: Session) -> List[dict]:
+    orders = (
+        db.query(Order)
+        .order_by(Order.created_at.desc())
+        .all()
+    )
+
+    return [
+        {
+            "id": f"#OD{order.id}",
+            "user": (
+                f"{order.customer.first_name} {order.customer.last_name}"
+                if order.customer else "Unknown"
+            ),
+            "date": order.created_at.strftime("%d %b %Y"),
+            "Amount": f"KD:{order.total_amount:.2f}",
+            "status": order.status,
+            "attribution_referrer": order.attribution_referrer,
+        }
+        for order in orders
+    ]
+
+def get_attribution_summary(db: Session) -> List[dict]:
+    results = (
+        db.query(Order.attribution_referrer, func.count(Order.id))
+        .group_by(Order.attribution_referrer)
+        .all()
+    )
+
+    summary = [
+        {
+            "referrer": referrer if referrer else "Unknown",
+            "count": count
+        }
+        for referrer, count in results
+    ]
+
+    return summary

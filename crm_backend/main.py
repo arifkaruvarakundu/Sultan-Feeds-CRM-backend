@@ -1,7 +1,7 @@
 # main.py
 import os
 from fastapi import FastAPI
-from crm_backend.routers import sync, auth, orders, products
+from crm_backend.routers import sync, auth, orders, products, customers
 import redis
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,6 +34,7 @@ app.include_router(sync.router)
 app.include_router(auth.router)
 app.include_router(orders.router)
 app.include_router(products.router)
+app.include_router(customers.router)
 
 @app.get("/")
 def read_root():

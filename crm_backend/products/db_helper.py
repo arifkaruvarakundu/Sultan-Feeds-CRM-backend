@@ -1,4 +1,4 @@
-from sqlalchemy import func
+from sqlalchemy import func, cast, Date
 from sqlalchemy.orm import Session
 from crm_backend.models import *
 from typing import List, Dict
@@ -83,3 +83,41 @@ def get_products_table_data(db: Session):
 
     products = db.query(Product).all()
     return [ProductSchema.from_orm(p) for p in products]
+
+def get_product_details_data(db: Session, id: int) -> dict:
+    
+    return db.query(Product).filter(Product.id == id).all() 
+
+def get_sales_over_time_data(db: Session, start_date: str, end_date: str, product_id: int):
+    try:
+        start = datetime.fromisoformat(start_date)
+        end = datetime.fromisoformat(end_date)
+    except ValueError:
+        return []
+
+    results = (
+        db.query(
+            Product.name.label("product_name"),
+            cast(Order.created_at, Date).label("date"),
+            func.sum(OrderItem.quantity).label("total_sales")
+        )
+        .join(OrderItem, Product.external_id == OrderItem.product_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .filter(Order.created_at >= start)
+        .filter(Order.created_at <= end)
+        .filter(Product.id == product_id)
+        .group_by(Product.name, cast(Order.created_at, Date))
+        .order_by(cast(Order.created_at, Date))
+        .all()
+    )
+
+    # Combine rows under one product object for frontend charting
+    return [
+        {
+            "product": row.product_name,
+            "date": row.date.isoformat(),
+            "total_sales": row.total_sales
+        }
+        for row in results
+    ]
+

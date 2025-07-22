@@ -1,16 +1,15 @@
 # crm_backend/tasks/__init__.py
 from crm_backend.celery_app import celery
-from crm_backend.tasks.send_whatsapp import send_whatsapp_to_customers
+# from crm_backend.tasks.send_whatsapp import generate_and_send_messages
 from crm_backend.tasks.fetch_orders import fetch_and_save_orders
 from crm_backend.tasks.fetch_products import fetch_and_save_products
 from crm_backend.database import SessionLocal
 from celery import shared_task
 from celery import chain
 
-@celery.task(name="send_whatsapp_broadcast")
-def send_whatsapp_broadcast():
-    send_whatsapp_to_customers()
-
+# @celery.task(name="send_whatsapp_broadcast")
+# def send_whatsapp_broadcast():
+#     generate_and_send_messages()
 
 @celery.task(name="fetch_orders_task")
 def fetch_orders_task(*args, **kwargs):
