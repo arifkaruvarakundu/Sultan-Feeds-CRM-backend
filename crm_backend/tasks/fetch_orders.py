@@ -1,6 +1,7 @@
 import httpx
 from sqlalchemy.orm import Session
 from crm_backend.models import Customer, Address, Order, OrderItem, Product, SyncState
+from crm_backend.tasks.send_whatsapp import send_whatsapp_template
 from datetime import datetime, timezone
 import os
 from dotenv import load_dotenv
@@ -63,40 +64,77 @@ def set_last_synced_time(db: Session, timestamp: str) -> None:
         db.add(SyncState(key="last_order_sync", value=timestamp))
     db.commit()
 
+# def update_orders_from_api(db: Session, api_data: list):
+#     for order_data in api_data:
+#         order_key = order_data.get("order_key")
+#         status = order_data.get("status")
+#         meta = {meta["key"]: meta["value"] for meta in order_data.get("meta_data", [])}
+
+#         # Extract values from meta
+#         attribution_referrer = meta.get("_wc_order_attribution_referrer")
+#         session_pages = meta.get("_wc_order_attribution_session_pages")
+#         session_count = meta.get("_wc_order_attribution_session_count")
+#         device_type = meta.get("_wc_order_attribution_device_type")
+
+#         # Convert types if needed (some may come as strings)
+#         try:
+#             session_pages = int(session_pages) if session_pages is not None else None
+#         except ValueError:
+#             session_pages = None
+
+#         try:
+#             session_count = int(session_count) if session_count is not None else None
+#         except ValueError:
+#             session_count = None
+
+#         # Find order in DB
+#         order = db.query(Order).filter(Order.order_key == order_key).first()
+#         if not order:
+#             continue  # Skip if order not found
+
+#         # Update order fields
+#         order.status = status
+#         order.attribution_referrer = attribution_referrer
+#         order.session_pages = session_pages
+#         order.session_count = session_count
+#         order.device_type = device_type
+
+#     db.commit()
+
 def update_orders_from_api(db: Session, api_data: list):
     for order_data in api_data:
         order_key = order_data.get("order_key")
-        status = order_data.get("status")
+        new_status = order_data.get("status")
         meta = {meta["key"]: meta["value"] for meta in order_data.get("meta_data", [])}
 
-        # Extract values from meta
-        attribution_referrer = meta.get("_wc_order_attribution_referrer")
-        session_pages = meta.get("_wc_order_attribution_session_pages")
-        session_count = meta.get("_wc_order_attribution_session_count")
-        device_type = meta.get("_wc_order_attribution_device_type")
-
-        # Convert types if needed (some may come as strings)
-        try:
-            session_pages = int(session_pages) if session_pages is not None else None
-        except ValueError:
-            session_pages = None
-
-        try:
-            session_count = int(session_count) if session_count is not None else None
-        except ValueError:
-            session_count = None
-
-        # Find order in DB
         order = db.query(Order).filter(Order.order_key == order_key).first()
         if not order:
-            continue  # Skip if order not found
+            continue  # Order doesn't exist locally yet
 
-        # Update order fields
-        order.status = status
-        order.attribution_referrer = attribution_referrer
-        order.session_pages = session_pages
-        order.session_count = session_count
-        order.device_type = device_type
+        old_status = order.status
+        order.status = new_status
+        order.attribution_referrer = meta.get("_wc_order_attribution_referrer")
+        order.session_pages = int(meta.get("_wc_order_attribution_session_pages", 0))
+        order.session_count = int(meta.get("_wc_order_attribution_session_count", 0))
+        order.device_type = meta.get("_wc_order_attribution_device_type")
+
+        # ✅ Trigger WhatsApp only if status has changed
+        if new_status != old_status and order.customer and order.customer.phone:
+            template_name = WHATSAPP_TEMPLATES.get(new_status)
+            if template_name:
+                try:
+                    full_name = f"{order.customer.first_name} {order.customer.last_name}".strip()
+                    send_whatsapp_template(
+                        phone_number=order.customer.phone,
+                        customer_name=full_name,
+                        order_number=str(order.external_id),
+                        template_name=template_name
+                    )
+                    print(f"✅ Sent WhatsApp message for order {order.external_id} status change: {old_status} → {new_status}")
+                except Exception as e:
+                    print(f"❌ Failed to send WhatsApp for status update: {e}")
+            else:
+                print(f"⚠️ No WhatsApp template for status '{new_status}'")
 
     db.commit()
 
@@ -128,6 +166,15 @@ def backfill_existing_orders(db: Session):
 
     db.commit()
     print("✅ Finished backfilling existing orders.")
+
+WHATSAPP_TEMPLATES = {
+    "processing": "order_processing_template",
+    "completed": "your_order_confirmed",
+    "cancelled": "order_cancelled_template",
+    "on-hold": "order_on_hold_template",
+    "failed": "order_failed"
+    # Add more as needed
+}
 
 def fetch_and_save_orders(db: Session) -> None:
     """Fetch new WooCommerce orders since last sync and save to the database."""
@@ -238,8 +285,28 @@ def fetch_and_save_orders(db: Session) -> None:
                         product_id=product_id,  # ✅ correct value
                         quantity=item["quantity"],
                         price=float(item["price"])
-)
+                    )
                     db.add(order_item)
+                
+                # ✅ WhatsApp Template Message Based on Status
+                if customer.phone:
+                    try:
+                        full_name = f"{customer.first_name} {customer.last_name}".strip()
+                        template_name = WHATSAPP_TEMPLATES.get(order.status)
+
+                        if template_name:
+                            send_whatsapp_template(
+                                phone_number=customer.phone,
+                                customer_name=full_name,
+                                order_number=str(order.external_id),
+                                template_name=template_name
+                            )
+                        else:
+                            print(f"⚠️ No template configured for order status: {order.status}")
+
+                    except Exception as e:
+                        print(f"❌ Failed to send WhatsApp message: {e}")
+
             db.commit()
             print(f"Committed page {page}")
             
