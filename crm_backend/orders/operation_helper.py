@@ -89,3 +89,27 @@ def function_get_attribution_summary(db: Session) -> List[dict]:
     summary_df = df.groupby("mapped_referrer", as_index=False)["count"].sum()
     return summary_df.to_dict(orient="records")
 
+def function_get_orders_by_location(db: Session) -> List[dict]:
+    # Get city-level order data from Kuwait
+    results = get_orders_by_location_data(db)
+
+    if not results:
+        return []
+
+    # Load into DataFrame
+    df = pd.DataFrame(results)
+
+    # Ensure required columns exist
+    df["city"] = df["city"].fillna("Unknown")
+    df["orders"] = df["orders"].fillna(0)
+
+    # Group by city and sum orders (though it's already grouped)
+    grouped_df = df.groupby(["city"], as_index=False)["orders"].sum()
+
+    # Add coordinates if needed (merge back with first df if needed)
+    if "coordinates" in df.columns:
+        # Keep only one coordinate per city (first)
+        coord_map = df.drop_duplicates("city")[["city", "coordinates"]]
+        grouped_df = grouped_df.merge(coord_map, on="city", how="left")
+
+    return grouped_df.to_dict(orient="records")

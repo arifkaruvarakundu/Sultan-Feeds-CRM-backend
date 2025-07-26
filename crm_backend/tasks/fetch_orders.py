@@ -168,10 +168,10 @@ def backfill_existing_orders(db: Session):
     print("✅ Finished backfilling existing orders.")
 
 WHATSAPP_TEMPLATES = {
-    "processing": "order_processing_template",
-    "completed": "your_order_confirmed",
-    "cancelled": "order_cancelled_template",
-    "on-hold": "order_on_hold_template",
+    "processing": "order_processing",
+    "completed": "order_completed",
+    "cancelled": "order_cancelled",
+    "on-hold": "order_onhold",
     "failed": "order_failed"
     # Add more as needed
 }

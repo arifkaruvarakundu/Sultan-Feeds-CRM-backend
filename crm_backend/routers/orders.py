@@ -69,3 +69,10 @@ def get_attribution_summary_data(db: Session = Depends(get_db)):
 
     response_data = function_get_attribution_summary(db=db)
     return response_data
+
+@router.get("/orders-by-location", response_model = List[dict])
+def get_orders_by_location(db: Session = Depends(get_db)):
+
+    response_data = function_get_orders_by_location(db=db)
+
+    return response_data
