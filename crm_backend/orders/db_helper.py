@@ -234,6 +234,7 @@ def get_attribution_summary(db: Session) -> List[dict]:
     return summary
 
 def get_orders_by_location_data(db: Session) -> List[dict]:
+
     # Step 1: Query city-level order counts (only from Kuwait)
     clean_city = func.lower(func.trim(Address.city))
 
@@ -250,7 +251,6 @@ def get_orders_by_location_data(db: Session) -> List[dict]:
     )
 
     print(f"Raw city-level order counts: {results}")
-
 
     # orders_with_city = (
     #     db.query(Order.id, Address.city)
@@ -281,7 +281,6 @@ def get_orders_by_location_data(db: Session) -> List[dict]:
 
     # # Usage
     # city_counts = analyze_orders(orders_with_city)
-
 
     # Step 2: City name normalization map (partial view for clarity)
     CITY_NAME_MAP = {

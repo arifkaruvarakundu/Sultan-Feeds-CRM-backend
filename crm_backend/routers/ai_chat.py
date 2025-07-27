@@ -211,7 +211,7 @@ def ensure_joins(sql: str) -> str:
     Ensures SQL joins use the correct keys across known table relationships.
     Also adds missing FROM clauses when required.
     """
-
+    
     # Known correct joins (wrong_pattern -> correct_sql_fragment)
     join_fixes = [
         # Products should be joined on external_id
