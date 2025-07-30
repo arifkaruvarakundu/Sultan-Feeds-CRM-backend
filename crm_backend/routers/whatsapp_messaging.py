@@ -1,4 +1,4 @@
-from fastapi import Request, APIRouter, Query
+from fastapi import Request, APIRouter, Query, Depends
 from fastapi.responses import PlainTextResponse, JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -7,6 +7,11 @@ import os
 from fastapi import WebSocket
 from fastapi.websockets import WebSocketDisconnect
 import asyncio
+from sqlalchemy.orm import Session
+from crm_backend.models import WhatsAppMessage, Customer
+from crm_backend.database import get_db
+from datetime import datetime
+from typing import List
 
 active_connections = []
 
@@ -19,53 +24,59 @@ class WhatsAppMessageRequest(BaseModel):
     to_number: str  # e.g. 201234567890 (no +)
     message: str
 
-# 🔔 Webhook POST
-# @router.post("/webhook")
-# async def whatsapp_webhook(request: Request):
-#     data = await request.json()
-#     print("Received:", data)
-#     return {"status": "received"}
-
-# @router.post("/webhook")
-# async def whatsapp_webhook(request: Request):
-#     data = await request.json()
-#     print("Received:", data)
-
-#     for ws in active_connections:
-#         await ws.send_json(data)  # forward to connected frontends
-
-#     return {"status": "received"}
-
-
-# @router.post("/webhook")
-# async def whatsapp_webhook(request: Request):
-#     data = await request.json()
-#     print("📩 Webhook Received:", data)
-
-#     # Extract actual message text (depends on WhatsApp's structure)
-#     try:
-#         message_text = data["entry"][0]["changes"][0]["value"]["messages"][0]["text"]["body"]
-#     except (KeyError, IndexError):
-#         message_text = "[unknown format]"
-
-#     disconnected = []
-#     for conn in active_connections:
-#         try:
-#             await conn.send_json({"body": message_text})
-#         except Exception as e:
-#             print("❌ Failed to send to WebSocket:", e)
-#             disconnected.append(conn)
-
-#     # Remove disconnected clients
-#     for conn in disconnected:
-#         active_connections.remove(conn)
-
-#     return {"status": "received"}
-
 @router.post("/webhook")
-async def whatsapp_webhook(request: Request):
+async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     data = await request.json()
     print("📩 Webhook Received:", data)
+
+    value = data.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {})
+    messages = value.get("messages", [])
+    statuses = value.get("statuses", [])
+
+    if messages:
+        msg = messages[0]
+        from_number = msg.get("from")
+        body = msg.get("text", {}).get("body", "")
+        timestamp = msg.get("timestamp", None)
+        wa_msg_id = msg.get("id")
+
+        if timestamp:
+            timestamp = datetime.fromtimestamp(int(timestamp))
+
+        # 📌 Lookup customer by phone
+        customer = db.query(Customer).filter(Customer.phone.contains(from_number[-8:])).first()
+
+        if customer:
+            db_msg = WhatsAppMessage(
+                customer_id=customer.id,
+                direction="incoming",
+                message=body,
+                timestamp=timestamp or datetime.utcnow(),
+                whatsapp_message_id=wa_msg_id,
+                status = None
+            )
+            db.add(db_msg)
+            db.commit()
+    
+     # ✅ Handle message status updates (sent/delivered/read)
+    if statuses:
+        status_event = statuses[0]
+        wa_msg_id = status_event.get("id")
+        status_type = status_event.get("status")  # e.g., "delivered", "read"
+        timestamp = status_event.get("timestamp")
+
+        if timestamp:
+            timestamp = datetime.fromtimestamp(int(timestamp))
+
+        # ✅ FIXED: Use whatsapp_message_id, not id
+        db_msg = db.query(WhatsAppMessage).filter(
+            WhatsAppMessage.whatsapp_message_id == wa_msg_id
+        ).first()
+
+        if db_msg:
+            db_msg.status = status_type
+            db_msg.timestamp = timestamp or db_msg.timestamp
+            db.commit()
 
     disconnected = []
     for conn in active_connections:
@@ -118,14 +129,28 @@ def send_whatsapp_message(to_number: str, message: str):
 
 # 🔗 New endpoint: Send message via API
 @router.post("/send-message")
-def send_message(data: WhatsAppMessageRequest):
+def send_message(data: WhatsAppMessageRequest, db: Session = Depends(get_db)):
     try:
         result = send_whatsapp_message(data.to_number, data.message)
+
+        # Get the customer from the DB
+        customer = db.query(Customer).filter(Customer.phone.contains(data.to_number[-8:])).first()
+
+        if customer:
+            db_msg = WhatsAppMessage(
+                customer_id=customer.id,
+                direction="outgoing",
+                message=data.message,
+                timestamp=datetime.utcnow(),
+                status="sent"
+            )
+            db.add(db_msg)
+            db.commit()
+
         return JSONResponse(content=result)
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-###
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -135,3 +160,27 @@ async def websocket_endpoint(websocket: WebSocket):
             await asyncio.sleep(1)  # optional, can be ping
     except WebSocketDisconnect:
         active_connections.remove(websocket)
+
+@router.get("/whatsapp-messages", response_model=List[dict])
+def get_messages(phone: str, db: Session = Depends(get_db)):
+    customer = db.query(Customer).filter(Customer.phone == phone).first()
+    if not customer:
+        return []
+
+    messages = (
+        db.query(WhatsAppMessage)
+        .filter(WhatsAppMessage.customer_id == customer.id)
+        .order_by(WhatsAppMessage.timestamp.asc())
+        .all()
+    )
+
+    return [
+        {
+            "id": m.id,
+            "text": m.message,
+            "from": "me" if m.direction == "outgoing" else "them",
+            "timestamp": m.timestamp.timestamp(),  # convert to epoch for JS
+            "status": "sent" if m.direction == "outgoing" else None,
+        }
+        for m in messages
+    ]

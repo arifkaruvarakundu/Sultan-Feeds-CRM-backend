@@ -2,7 +2,7 @@ import httpx
 from sqlalchemy.orm import Session
 from crm_backend.models import Customer, Address, Order, OrderItem, Product, SyncState
 from crm_backend.tasks.send_whatsapp import send_whatsapp_template
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import os
 from dotenv import load_dotenv
 from dateutil.parser import isoparse
@@ -63,43 +63,6 @@ def set_last_synced_time(db: Session, timestamp: str) -> None:
     else:
         db.add(SyncState(key="last_order_sync", value=timestamp))
     db.commit()
-
-# def update_orders_from_api(db: Session, api_data: list):
-#     for order_data in api_data:
-#         order_key = order_data.get("order_key")
-#         status = order_data.get("status")
-#         meta = {meta["key"]: meta["value"] for meta in order_data.get("meta_data", [])}
-
-#         # Extract values from meta
-#         attribution_referrer = meta.get("_wc_order_attribution_referrer")
-#         session_pages = meta.get("_wc_order_attribution_session_pages")
-#         session_count = meta.get("_wc_order_attribution_session_count")
-#         device_type = meta.get("_wc_order_attribution_device_type")
-
-#         # Convert types if needed (some may come as strings)
-#         try:
-#             session_pages = int(session_pages) if session_pages is not None else None
-#         except ValueError:
-#             session_pages = None
-
-#         try:
-#             session_count = int(session_count) if session_count is not None else None
-#         except ValueError:
-#             session_count = None
-
-#         # Find order in DB
-#         order = db.query(Order).filter(Order.order_key == order_key).first()
-#         if not order:
-#             continue  # Skip if order not found
-
-#         # Update order fields
-#         order.status = status
-#         order.attribution_referrer = attribution_referrer
-#         order.session_pages = session_pages
-#         order.session_count = session_count
-#         order.device_type = device_type
-
-#     db.commit()
 
 def update_orders_from_api(db: Session, api_data: list):
     for order_data in api_data:
@@ -177,17 +140,15 @@ WHATSAPP_TEMPLATES = {
 }
 
 def fetch_and_save_orders(db: Session) -> None:
-    """Fetch new WooCommerce orders since last sync and save to the database."""
+    """Fetch recent WooCommerce orders and sync status or insert new ones."""
     print(f"[DB INFO] Connected to: {db.bind.url}")
 
     auth = (WC_CONSUMER_KEY, WC_CONSUMER_SECRET)
     per_page = 100
     page = 1
-    latest_order = db.query(Order).order_by(Order.created_at.desc()).first()
-    after_date = latest_order.created_at.isoformat() if latest_order else "2000-01-01T00:00:00Z"
-    # after_date = get_last_synced_time(db)
-    # after_date = get_last_synced_time(db)
-    # first_sync = after_date == "2000-01-01T00:00:00Z"
+
+    four_days_ago = datetime.utcnow() - timedelta(days=4)
+    after_date = four_days_ago.isoformat() + "Z"
     print(f"Fetching orders created after {after_date}")
 
     while True:
@@ -208,6 +169,7 @@ def fetch_and_save_orders(db: Session) -> None:
             break
 
         print(f"Processing page {page}, {len(orders)} new orders")
+
         try:
             for data in orders:
                 email = data["billing"].get("email") or None
@@ -251,14 +213,51 @@ def fetch_and_save_orders(db: Session) -> None:
                     db.add(address)
 
                 order_in_db = db.query(Order).filter_by(order_key=data["order_key"]).first()
-                if order_in_db:
-                    # Update existing order with new metadata
-                    update_orders_from_api(db, [data])
-                    continue  # Don't re-insert
 
+                # Extract metadata
                 meta = data.get("meta_data", [])
                 meta_dict = {entry.get("key"): entry.get("value") for entry in meta}
 
+                if order_in_db:
+                    # Check for status change
+                    new_status = data["status"]
+                    updated = False
+
+                    if order_in_db.status != new_status:
+                        order_in_db.status = new_status
+                        updated = True
+
+                    new_payment_method = data.get("payment_method_title")
+                    if order_in_db.payment_method != new_payment_method:
+                        order_in_db.payment_method = new_payment_method
+                        updated = True
+
+                    # Update if changed
+                    if updated:
+                        db.add(order_in_db)
+                        db.flush()
+                        print(f"🔄 Updated order #{order_in_db.external_id} to status: {new_status}")
+
+                        if customer.phone:
+                            try:
+                                full_name = f"{customer.first_name} {customer.last_name}".strip()
+                                template_name = WHATSAPP_TEMPLATES.get(new_status)
+
+                                if template_name:
+                                    send_whatsapp_template(
+                                        phone_number=customer.phone,
+                                        customer_name=full_name,
+                                        order_number=str(order_in_db.external_id),
+                                        template_name=template_name
+                                    )
+                                else:
+                                    print(f"⚠️ No template configured for status: {new_status}")
+                            except Exception as e:
+                                print(f"❌ WhatsApp send failed: {e}")
+
+                    continue  # Skip to next if this order already existed
+
+                # If new order, create it
                 order = Order(
                     order_key=data["order_key"],
                     customer_id=customer.id,
@@ -277,18 +276,18 @@ def fetch_and_save_orders(db: Session) -> None:
 
                 for item in data.get("line_items", []):
                     product = db.query(Product).filter_by(external_id=item["product_id"]).first()
-                    product_id = product.external_id if product else None  # ✅ foreign-key-safe
+                    product_id = product.external_id if product else None
 
                     order_item = OrderItem(
                         order_id=order.id,
                         product_name=item["name"],
-                        product_id=product_id,  # ✅ correct value
+                        product_id=product_id,
                         quantity=item["quantity"],
                         price=float(item["price"])
                     )
                     db.add(order_item)
-                
-                # ✅ WhatsApp Template Message Based on Status
+
+                # Send WhatsApp on new order
                 if customer.phone:
                     try:
                         full_name = f"{customer.first_name} {customer.last_name}".strip()
@@ -303,19 +302,13 @@ def fetch_and_save_orders(db: Session) -> None:
                             )
                         else:
                             print(f"⚠️ No template configured for order status: {order.status}")
-
                     except Exception as e:
-                        print(f"❌ Failed to send WhatsApp message: {e}")
+                        print(f"❌ WhatsApp send failed: {e}")
 
             db.commit()
-            print(f"Committed page {page}")
-            
-            # # ✅ Update sync timestamp
-            if first_sync and orders:
-                last_order_created = max(isoparse(order["date_created"]) for order in orders)
-                set_last_synced_time(db, last_order_created.isoformat())
-
+            print(f"✅ Committed page {page}")
         except Exception as e:
             db.rollback()
-            print(f"❌ Failed to save orders from page {page}: {e}")
+            print(f"❌ Error processing page {page}: {e}")
         page += 1
+

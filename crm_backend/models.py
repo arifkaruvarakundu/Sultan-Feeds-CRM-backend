@@ -3,6 +3,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
+from datetime import datetime
 
 Base = declarative_base()
 
@@ -22,8 +23,10 @@ class Customer(Base):
     last_name = Column(String, nullable=False)
     email = Column(String, index=True, nullable=True)
     phone = Column(String, unique=True, index=True)
+
     orders = relationship("Order", back_populates="customer", cascade="all, delete-orphan")
     address = relationship("Address", back_populates="customer", uselist=False, cascade="all, delete-orphan")
+    whatsapp_messages = relationship("WhatsAppMessage", back_populates="customer", cascade="all, delete-orphan")
 
 class Address(Base):
     __tablename__ = "addresses"
@@ -100,3 +103,17 @@ class SyncState(Base):
     __tablename__ = "sync_state"
     key = Column(String, primary_key=True)
     value = Column(String)
+
+class WhatsAppMessage(Base):
+    __tablename__ = "whatsapp_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
+    direction = Column(String, nullable=False)  # "incoming" or "outgoing"
+    message = Column(String, nullable=False)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    status = Column(String, nullable=True)  # ✅ NEW: sent, delivered, read
+    whatsapp_message_id = Column(String, nullable=True, unique=True)
+
+    # 🔙 Relationship back to customer
+    customer = relationship("Customer", back_populates="whatsapp_messages")

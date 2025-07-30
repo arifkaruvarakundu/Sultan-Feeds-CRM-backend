@@ -37,8 +37,15 @@ celery.conf.beat_schedule = {
     },
 
     # 📲 Send WhatsApp messages daily at 10 AM (if re-enabled)
-    "send-whatsapp-daily": {
-        "task": "send_whatsapp_broadcast",
-        "schedule": crontab(hour=10, minute=0),
-    },
+    # "send-whatsapp-daily": {
+    #     "task": "send_whatsapp_broadcast",
+    #     "schedule": crontab(hour=10, minute=0),
+    # },
+
+    # 🔁 Run reorder prediction and message customers daily at 9 AM UTC
+    # "send-reorder-prediction-daily": {
+    #     "task": "predict_customers_task",
+    #     "schedule": crontab(hour=9, minute=0),
+    # },
 }
+

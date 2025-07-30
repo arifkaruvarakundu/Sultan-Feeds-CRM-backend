@@ -16,7 +16,7 @@ def get_latest_orders_data(db: Session) -> List[dict]:
     return [
         {
             "id": f"#OD{order.id}",
-            "user": order.customer.first_name if order.customer else "Unknown",
+            "user": f"{order.customer.first_name} {order.customer.last_name}" if order.customer else "Unknown",
             "date": order.created_at.strftime("%d %b %Y"),
             "price": f"${order.total_amount:.2f}",
             "status": order.status,

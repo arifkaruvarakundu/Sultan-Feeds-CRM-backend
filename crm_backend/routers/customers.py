@@ -52,5 +52,3 @@ def get_full_customer_classification(db: Session = Depends(get_db)):
     response_data = function_get_full_customer_classification(db=db)
     
     return response_data
-
-
