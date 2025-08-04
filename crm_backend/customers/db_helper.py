@@ -13,7 +13,7 @@ def customers_table_data(db: Session) -> List[dict]:
             Customer.last_name,
             Customer.phone,
             func.count(Order.id).label("total_orders"),
-            func.sum(Order.total_amount).label("total_spending")
+            func.sum(case((Order.status == "completed", Order.total_amount),else_=0)).label("total_spending")
         )
         .join(Order, Order.customer_id == Customer.id)
         # .filter(Order.status == "completed")

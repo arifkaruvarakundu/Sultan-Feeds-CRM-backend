@@ -13,6 +13,7 @@ def get_top_selling_products_data(db: Session) -> List[dict]:
             func.sum(OrderItem.quantity).label("total_quantity_sold")
         )
         .join(OrderItem, Product.external_id == OrderItem.product_id)
+        # .filter(Order.status == "completed")
         .group_by(Product.name)
         .order_by(func.sum(OrderItem.quantity).desc())
         .limit(5)
@@ -35,6 +36,7 @@ def get_top_selling_products_inbetween_data(db: Session, start_date: str, end_da
         .join(Order, Order.id == OrderItem.order_id)
         .filter(Order.created_at >= start_date)
         .filter(Order.created_at <= end_date)
+        .filter(Order.status == "completed")
         .group_by(Product.name)
         .order_by(func.sum(OrderItem.quantity).desc())
         .limit(5)
@@ -58,25 +60,56 @@ def get_products_sales_table_data(db: Session, start_date: str, end_date: str):
             Product.id,
             Product.name,
             Product.categories,
+            Product.sales_price,
+            Product.regular_price,
             func.sum(OrderItem.quantity).label("total_sales")
         )
         .join(OrderItem, Product.external_id == OrderItem.product_id)
         .join(Order, Order.id == OrderItem.order_id)
         .filter(Order.created_at >= start)
+        .filter(Order.status == "completed")
         .filter(Order.created_at <= end)
-        .group_by(Product.id, Product.name, Product.categories)
+        .group_by(
+            Product.id,
+            Product.name,
+            Product.categories,
+            Product.sales_price,
+            Product.regular_price
+        )
         .order_by(func.sum(OrderItem.quantity).desc())
         .all()
     )
+
+    def clean_price(sp, rp):
+        """Return sales_price if valid, else regular_price, else 0."""
+    
+        def to_float(val):
+            try:
+                if val is None:
+                    return None
+                if isinstance(val, str):
+                    val = val.strip()
+                    if val in ("", "0", "0.0"):
+                        return None
+                num = float(val)
+                return num if num > 0 else None
+            except (ValueError, TypeError):
+                return None
+        
+        sp_val = to_float(sp)
+        rp_val = to_float(rp)
+        
+        return sp_val if sp_val is not None else (rp_val if rp_val is not None else 0.0)
 
     return [
         {
             "id": p_id,
             "name": name,
             "category": categories,
+            "price": clean_price(sales_price, regular_price),
             "total_sales": total_sales or 0
         }
-        for p_id, name, categories, total_sales in results
+        for p_id, name, categories, sales_price, regular_price, total_sales in results
     ]
 
 def get_products_table_data(db: Session):
@@ -105,6 +138,7 @@ def get_sales_over_time_data(db: Session, start_date: str, end_date: str, produc
         .join(Order, Order.id == OrderItem.order_id)
         .filter(Order.created_at >= start)
         .filter(Order.created_at <= end)
+        .filter(Order.status == "completed")
         .filter(Product.id == product_id)
         .group_by(Product.name, cast(Order.created_at, Date))
         .order_by(cast(Order.created_at, Date))
@@ -120,4 +154,3 @@ def get_sales_over_time_data(db: Session, start_date: str, end_date: str, produc
         }
         for row in results
     ]
-

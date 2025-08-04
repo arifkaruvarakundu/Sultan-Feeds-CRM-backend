@@ -184,3 +184,5 @@ def get_messages(phone: str, db: Session = Depends(get_db)):
         }
         for m in messages
     ]
+
+# @router.get()

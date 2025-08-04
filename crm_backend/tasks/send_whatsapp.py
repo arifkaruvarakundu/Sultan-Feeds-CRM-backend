@@ -4,12 +4,8 @@ from langchain_mistralai.chat_models import ChatMistralAI
 from langchain.chains import LLMChain
 from dotenv import load_dotenv
 
-# MISTRAL_API_KEY = "ZcyCXrqjBgrbCKzm04q65YGxxi5h48Z0"
-# os.environ["MISTRAL_API_KEY"] = MISTRAL_API_KEY
-
 load_dotenv()
 
-# WHATSAPP_API_URL = "https://graph.facebook.com/v15.0/730945363428548/messages"
 # WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 # WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
 # WHATSAPP_API_URL = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"

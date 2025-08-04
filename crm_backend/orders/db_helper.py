@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from crm_backend.models import *
 from typing import List, Dict
-from sqlalchemy import func, extract, cast, Date, desc, text
+from sqlalchemy import func, extract, cast, Date, desc, text, distinct
 from datetime import date, timedelta, datetime
 from collections import Counter
 
@@ -160,7 +160,7 @@ def get_orders_in_range_data(db: Session, start_date: str, end_date: str, granul
     base_query = db.query(Order).filter(
         Order.created_at >= start_date,
         Order.created_at <= end_date,
-        Order.status.in_(['completed', 'processing'])
+        Order.status.in_(['completed'])
     )
 
     if granularity == "daily":
@@ -417,3 +417,62 @@ def get_orders_by_location_data(db: Session) -> List[dict]:
             })
 
     return response
+
+# def get_orders_with_customer_city(db: Session) -> List[Dict]:
+#     """
+#     Fetch all orders along with the associated customer's address city.
+    
+#     Args:
+#         db (Session): SQLAlchemy database session.
+    
+#     Returns:
+#         List[Dict]: List of orders with city info.
+#     """
+#     results = (
+#         db.query(
+#             Order.id,
+#             Order.status,
+#             Order.total_amount,
+#             Address.city
+#         )
+#         .join(Customer, Order.customer_id == Customer.id)
+#         .join(Address, Address.customer_id == Customer.id)
+#         .all()
+#     )
+    
+#     return [
+#         {
+#             "order_id": order_id,
+#             "status": status,
+#             "total_amount": total_amount,
+#             "city": city
+#         }
+#         for order_id, status, total_amount, city in results
+#     ]
+
+def get_unique_order_count_per_city(db: Session) -> List[Dict]:
+    """
+    Get the count of unique orders for each city.
+
+    Args:
+        db (Session): SQLAlchemy database session.
+
+    Returns:
+        List[Dict]: A list where each dict has 'city' and 'unique_order_count'.
+    """
+    results = (
+        db.query(
+            Address.city,
+            func.count(distinct(Order.id)).label("unique_order_count")
+        )
+        .join(Customer, Order.customer_id == Customer.id)
+        .join(Address, Address.customer_id == Customer.id)
+        .group_by(Address.city)
+        .order_by(func.count(distinct(Order.id)).desc())
+        .all()
+    )
+    
+    return [
+        {"city": city, "unique_order_count": count}
+        for city, count in results
+    ]

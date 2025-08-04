@@ -113,3 +113,20 @@ def function_get_orders_by_location(db: Session) -> List[dict]:
         grouped_df = grouped_df.merge(coord_map, on="city", how="left")
 
     return grouped_df.to_dict(orient="records")
+
+def function_get_orders_orderid_city(db: Session) -> list[dict]:
+    """
+    Get unique order count per city and process with pandas.
+    
+    Args:
+        db (Session): SQLAlchemy database session.
+    
+    Returns:
+        list[dict]: List of dicts with city and order_count.
+    """
+    results = get_unique_order_count_per_city(db)  # already has city + unique_order_count
+    
+    df = pd.DataFrame(results)[["city", "unique_order_count"]]
+    df = df.rename(columns={"unique_order_count": "order_count"})  # rename for clarity
+    
+    return df.to_dict(orient="records")

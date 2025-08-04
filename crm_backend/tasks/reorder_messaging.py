@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from prophet import Prophet
 from sqlalchemy import create_engine
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 import pandas as pd
 import os
 import re
@@ -111,42 +111,112 @@ def get_customer_info(customer_id):
     finally:
         session.close()
 
-def predict_customers_to_remind(period_days: int = 30):
+#using prophet
+
+# def predict_customers_to_remind(period_days: int = 30):
+#     """
+#     Predicts which customers are likely to reorder today.
+#     Returns a list of customer IDs.
+#     """
+#     orders_df = pd.read_sql("SELECT customer_id, created_at FROM orders", engine)
+#     print("orders_df:", orders_df)
+#     orders_df["created_at"] = pd.to_datetime(orders_df["created_at"])
+
+#     customer_forecasts = defaultdict(list)
+#     today = date.today()
+
+#     for customer_id, group in orders_df.groupby("customer_id"):
+#         order_dates = group["created_at"].sort_values()
+
+#         if len(order_dates) < 3:
+#             continue
+
+#         df = pd.DataFrame({
+#             "ds": order_dates,
+#             "y": [1] * len(order_dates)
+#         })
+#         print("df in predict:",df)
+#         model = Prophet()
+#         model.fit(df)
+
+#         future = model.make_future_dataframe(periods=period_days)
+#         forecast = model.predict(future)
+
+#         future_forecast = forecast[forecast["ds"] > order_dates.max()]
+
+#         likely_reorder = future_forecast[future_forecast["yhat"] > 0.5]
+
+#         for _, row in likely_reorder.iterrows():
+#             if row["ds"].date() == today:
+#                 customer_forecasts[customer_id].append(today)
+
+#         # # Get the most likely reorder date (highest prediction)
+#         # best_day = future_forecast.loc[future_forecast['yhat'].idxmax()]
+#         # predicted_date = best_day["ds"].date()
+
+#         # Remind only if that predicted date is exactly today
+#         if predicted_date == today:
+#             customer_forecasts[customer_id].append(today)
+
+#     print(f"🔮 Predicted {len(customer_forecasts)} customers to remind today.")
+#     return list(customer_forecasts.keys())
+
+#using Avearage gap prediction(AGP)
+from datetime import date, timedelta
+import pandas as pd
+
+def predict_customers_to_remind(df, orders_df, target_date=None, last_reminded=None):
     """
-    Predicts which customers are likely to reorder today.
-    Returns a list of customer IDs.
+    Predict customers to remind based on:
+    - Classification
+    - Churn risk
+    - Classification-based cooldown periods
     """
-    orders_df = pd.read_sql("SELECT customer_id, created_at FROM orders", engine)
-    orders_df["created_at"] = pd.to_datetime(orders_df["created_at"])
+    today = target_date or date.today()
+    reminders = []
+    last_reminded = last_reminded or {}
 
-    customer_forecasts = defaultdict(list)
-    today = date.today()
+    # Define cooldown days for each classification
+    cooldown_days_map = {
+        "Loyal": 14,
+        "Frequent": 10,
+    }
 
-    for customer_id, group in orders_df.groupby("customer_id"):
-        order_dates = group["created_at"].sort_values()
+    for _, row in df.iterrows():
+        customer_id = row["customer_id"]
+        classification = row["classification"]
+        churn_risk = row["churn_risk"]
+        last_order_date = pd.to_datetime(row["last_order_date"]) if row["last_order_date"] else None
 
-        if len(order_dates) < 3:
+        # Skip high churn or dead/no orders
+        if churn_risk == "High" or classification in ["Dead", "No Orders"]:
             continue
 
-        df = pd.DataFrame({
-            "ds": order_dates,
-            "y": [1] * len(order_dates)
-        })
+        # Loyal / Frequent → average reorder interval
+        if classification in ["Loyal", "Frequent"]:
+            # Check cooldown
+            cooldown_days = cooldown_days_map.get(classification, 7)  # default 7 if not listed
+            if customer_id in last_reminded:
+                if (today - last_reminded[customer_id]).days < cooldown_days:
+                    continue
 
-        model = Prophet()
-        model.fit(df)
+            customer_orders = orders_df[orders_df["customer_id"] == customer_id]["created_at"].sort_values()
+            if len(customer_orders) < 2:
+                continue
+            gaps = customer_orders.diff().dropna().dt.days
+            avg_gap = gaps.mean()
+            predicted_next = customer_orders.max().date() + timedelta(days=round(avg_gap))
+            if predicted_next == today:
+                reminders.append(customer_id)
+        else:
+            continue
 
-        future = model.make_future_dataframe(periods=period_days)
-        forecast = model.predict(future)
+    # Update last reminder date
+    for cid in reminders:
+        last_reminded[cid] = today
 
-        future_forecast = forecast[forecast["ds"] > order_dates.max()]
-        likely_reorder = future_forecast[future_forecast["yhat"] > 0.5]
-
-        for _, row in likely_reorder.iterrows():
-            if row["ds"].date() == today:
-                customer_forecasts[customer_id].append(today)
-    print(f"🔮 Predicted {len(customer_forecasts)} customers to remind today.")
-    return list(customer_forecasts.keys())
+    print(f"📣 {len(reminders)} customers to remind on {today}")
+    return reminders, last_reminded
 
 def send_reorder_reminders_to_customers(customer_ids: list):
     """
@@ -186,5 +256,6 @@ def run_reorder_prediction_task():
     """
     customer_ids = predict_customers_to_remind()
     send_reorder_reminders_to_customers(customer_ids)
+    
     print(f"✅ Processed reorder prediction for {len(customer_ids)} customers.")
     return f"Processed reorder prediction for {len(customer_ids)} customers."

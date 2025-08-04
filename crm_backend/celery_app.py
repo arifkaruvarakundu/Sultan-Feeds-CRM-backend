@@ -47,5 +47,12 @@ celery.conf.beat_schedule = {
     #     "task": "predict_customers_task",
     #     "schedule": crontab(hour=9, minute=0),
     # },
+
+    # sending message after one month from the order date
+      "send-whatsapp-after-one-month":{
+        "task": "send_reminders_after_one_month_task",
+        "schedule": crontab(hour=10, minute=0)
+      }
+
 }
 

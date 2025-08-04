@@ -76,3 +76,10 @@ def get_orders_by_location(db: Session = Depends(get_db)):
     response_data = function_get_orders_by_location(db=db)
 
     return response_data
+
+@router.get("/orders-by-city", response_model = List[dict])
+def get_orders_by_city(db: Session = Depends(get_db)):
+
+    response_data = function_get_orders_orderid_city(db=db)
+
+    return response_data
