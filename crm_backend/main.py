@@ -1,7 +1,7 @@
 # main.py
 import os
 from fastapi import FastAPI
-from crm_backend.routers import sync, auth, orders, products, customers, ai_chat, whatsapp_messaging
+from crm_backend.routers import sync, auth, orders, products, customers, ai_chat, whatsapp_messaging, forecast_api
 import redis
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,6 +37,7 @@ app.include_router(products.router)
 app.include_router(customers.router)
 app.include_router(ai_chat.router)
 app.include_router(whatsapp_messaging.router)
+app.include_router(forecast_api.router)
 
 @app.get("/")
 def read_root():

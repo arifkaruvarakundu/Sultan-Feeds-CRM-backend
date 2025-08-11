@@ -230,3 +230,13 @@ def function_get_full_customer_classification(db):
         }
         for _, row in df.iterrows()
     ]
+
+def function_get_customers_with_low_churnRisk(db):
+
+    all_customers = function_get_full_customer_classification(db)
+    low_churn_customers = [c for c in all_customers if c["churn_risk"] == "Low"]
+    
+    return low_churn_customers
+
+
+

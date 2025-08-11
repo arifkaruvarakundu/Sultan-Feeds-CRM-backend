@@ -38,7 +38,7 @@ def get_total_orders_count_data(db:Session) -> List[dict]:
 def get_total_sales_data(db: Session) -> List[dict]:
     total_sales = (
         db.query(func.coalesce(func.sum(Order.total_amount), 0.0))
-        .filter(Order.status.in_(["processing", "completed"]))  # Include both statuses
+        .filter(Order.status.in_(["completed"]))  # Include both statuses
         .scalar()
     )
 
@@ -51,7 +51,7 @@ def get_total_sales_data(db: Session) -> List[dict]:
 
 def get_average_order_value_data(db: Session) -> List[dict]:
     total_sales = db.query(func.coalesce(func.sum(Order.total_amount), 0.0))\
-                    .filter(Order.status.in_(["processing", "completed"]))\
+                    .filter(Order.status.in_(["completed"]))\
                     .scalar()
 
     completed_order_count = db.query(func.count(Order.id))\
@@ -67,7 +67,7 @@ def get_average_order_value_data(db: Session) -> List[dict]:
             "amount": round(aov, 2)
         }
     ]
-
+    
 def get_total_customers_count_data(db: Session) -> List[dict]:
     total_customers = db.query(func.count(Customer.id)).scalar()
 
@@ -166,19 +166,22 @@ def get_orders_in_range_data(db: Session, start_date: str, end_date: str, granul
     if granularity == "daily":
         query = base_query.with_entities(
             func.date(Order.created_at).label('date'),
-            func.sum(Order.total_amount).label('total_amount')
+            func.sum(Order.total_amount).label('total_amount'),
+            func.count(Order.id).label('order_count')
         ).group_by(func.date(Order.created_at)).order_by(func.date(Order.created_at))
 
     elif granularity == "monthly":
         query = base_query.with_entities(
             func.date(Order.created_at).label('date'),
-            func.sum(Order.total_amount).label('total_amount')
+            func.sum(Order.total_amount).label('total_amount'),
+            func.count(Order.id).label('order_count')
         ).group_by(func.date(Order.created_at)).order_by(func.date(Order.created_at))
 
     elif granularity == "yearly":
         query = base_query.with_entities(
             func.to_char(Order.created_at, 'YYYY-MM').label('date'),
-            func.sum(Order.total_amount).label('total_amount')
+            func.sum(Order.total_amount).label('total_amount'),
+            func.count(Order.id).label('order_count')
         ).group_by(func.to_char(Order.created_at, 'YYYY-MM')).order_by(func.to_char(Order.created_at, 'YYYY-MM'))
 
     else:
@@ -189,7 +192,8 @@ def get_orders_in_range_data(db: Session, start_date: str, end_date: str, granul
     return [
         {
             "date": str(row.date),
-            "total_amount": round(float(row.total_amount), 3)
+            "total_amount": round(float(row.total_amount), 3),
+            "order_count": row.order_count
         }
         for row in results
     ]

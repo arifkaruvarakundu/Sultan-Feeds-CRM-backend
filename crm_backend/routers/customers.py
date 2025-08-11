@@ -52,3 +52,12 @@ def get_full_customer_classification(db: Session = Depends(get_db)):
     response_data = function_get_full_customer_classification(db=db)
     
     return response_data
+
+@router.get("/customers_with_low_churnRisk", response_model=List[CustomerClassificationResponse])
+def get_customers_with_low_churnRisk(db: Session = Depends(get_db)):
+
+    response_data = function_get_customers_with_low_churnRisk(db)
+
+    return response_data
+
+

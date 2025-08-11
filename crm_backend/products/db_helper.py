@@ -131,6 +131,7 @@ def get_sales_over_time_data(db: Session, start_date: str, end_date: str, produc
     results = (
         db.query(
             Product.name.label("product_name"),
+            Product.external_id.label("external_id"),
             cast(Order.created_at, Date).label("date"),
             func.sum(OrderItem.quantity).label("total_sales")
         )
@@ -140,7 +141,7 @@ def get_sales_over_time_data(db: Session, start_date: str, end_date: str, produc
         .filter(Order.created_at <= end)
         .filter(Order.status == "completed")
         .filter(Product.id == product_id)
-        .group_by(Product.name, cast(Order.created_at, Date))
+        .group_by(Product.name, Product.external_id, cast(Order.created_at, Date))
         .order_by(cast(Order.created_at, Date))
         .all()
     )
@@ -150,6 +151,7 @@ def get_sales_over_time_data(db: Session, start_date: str, end_date: str, produc
         {
             "product": row.product_name,
             "date": row.date.isoformat(),
+            "external_id": row.external_id,
             "total_sales": row.total_sales
         }
         for row in results
