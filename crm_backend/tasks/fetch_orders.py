@@ -2,7 +2,7 @@ import httpx
 from sqlalchemy.orm import Session
 from crm_backend.models import Customer, Address, Order, OrderItem, Product, SyncState
 from crm_backend.tasks.send_whatsapp import send_whatsapp_template
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
 from dateutil.parser import isoparse
@@ -12,6 +12,15 @@ load_dotenv()
 WC_BASE_URL = "https://souqalsultan.com/wp-json/wc/v3/orders"
 WC_CONSUMER_KEY = os.getenv("WC_CONSUMER_KEY")
 WC_CONSUMER_SECRET = os.getenv("WC_CONSUMER_SECRET")
+
+WHATSAPP_TEMPLATES = {
+    "processing": "order_processing",
+    "completed": "order_completed",
+    "cancelled": "order_cancelled",
+    "on-hold": "order_onhold",
+    "failed": "order_failed"
+    # Add more as needed
+}
 
 def normalize_phone(phone: str | None) -> str | None:
     """Remove spaces and country code prefix for consistency."""
@@ -34,7 +43,6 @@ def normalize_existing_phones(db: Session) -> None:
         normalized_phone = normalize_phone(original_phone)
 
         if normalized_phone != original_phone:
-            # Check if another customer already has this normalized phone
             existing = (
                 db.query(Customer)
                 .filter(Customer.phone == normalized_phone)
@@ -64,83 +72,136 @@ def set_last_synced_time(db: Session, timestamp: str) -> None:
         db.add(SyncState(key="last_order_sync", value=timestamp))
     db.commit()
 
-def update_orders_from_api(db: Session, api_data: list):
-    for order_data in api_data:
-        order_key = order_data.get("order_key")
-        new_status = order_data.get("status")
-        meta = {meta["key"]: meta["value"] for meta in order_data.get("meta_data", [])}
+def process_order_data(db: Session, data: dict) -> None:
+    email = data["billing"].get("email") or None
+    raw_phone = data["billing"].get("phone") or None
+    phone = normalize_phone(raw_phone)
 
-        order = db.query(Order).filter(Order.order_key == order_key).first()
-        if not order:
-            continue  # Order doesn't exist locally yet
+    customer = None
+    if phone:
+        customer = db.query(Customer).filter_by(phone=phone).first()
+    if not customer and email:
+        customer = db.query(Customer).filter_by(email=email).first()
 
-        old_status = order.status
-        order.status = new_status
-        order.attribution_referrer = meta.get("_wc_order_attribution_referrer")
-        order.session_pages = int(meta.get("_wc_order_attribution_session_pages", 0))
-        order.session_count = int(meta.get("_wc_order_attribution_session_count", 0))
-        order.device_type = meta.get("_wc_order_attribution_device_type")
+    if not customer:
+        customer = Customer(
+            first_name=data["billing"].get("first_name", ""),
+            last_name=data["billing"].get("last_name", ""),
+            email=email,
+            phone=phone,
+        )
+        db.add(customer)
+        db.flush()
 
-        # ✅ Trigger WhatsApp only if status has changed
-        if new_status != old_status and order.customer and order.customer.phone:
-            template_name = WHATSAPP_TEMPLATES.get(new_status)
-            if template_name:
+    existing_address = db.query(Address).filter_by(
+        customer_id=customer.id,
+        address_1=data["billing"].get("address_1", ""),
+        city=data["billing"].get("city", ""),
+        postcode=data["billing"].get("postcode", "")
+    ).first()
+
+    if not existing_address:
+        address = Address(
+            customer_id=customer.id,
+            company=data["billing"].get("company"),
+            address_1=data["billing"].get("address_1"),
+            address_2=data["billing"].get("address_2"),
+            city=data["billing"].get("city"),
+            state=data["billing"].get("state"),
+            postcode=data["billing"].get("postcode"),
+            country=data["billing"].get("country")
+        )
+        db.add(address)
+
+    order_in_db = db.query(Order).filter_by(order_key=data["order_key"]).first()
+
+    meta = data.get("meta_data", [])
+    meta_dict = {entry.get("key"): entry.get("value") for entry in meta}
+
+    if order_in_db:
+        new_status = data["status"]
+        updated = False
+
+        if order_in_db.status != new_status:
+            order_in_db.status = new_status
+            updated = True
+
+        new_payment_method = data.get("payment_method_title")
+        if order_in_db.payment_method != new_payment_method:
+            order_in_db.payment_method = new_payment_method
+            updated = True
+
+        if updated:
+            db.add(order_in_db)
+            db.flush()
+            print(f"🔄 Updated order #{order_in_db.external_id} to status: {new_status}")
+
+            if customer.phone:
                 try:
-                    full_name = f"{order.customer.first_name} {order.customer.last_name}".strip()
-                    send_whatsapp_template(
-                        phone_number=order.customer.phone,
-                        customer_name=full_name,
-                        order_number=str(order.external_id),
-                        template_name=template_name
-                    )
-                    print(f"✅ Sent WhatsApp message for order {order.external_id} status change: {old_status} → {new_status}")
+                    full_name = f"{customer.first_name} {customer.last_name}".strip()
+                    template_name = WHATSAPP_TEMPLATES.get(new_status)
+
+                    if template_name:
+                        send_whatsapp_template(
+                            phone_number=customer.phone,
+                            customer_name=full_name,
+                            order_number=str(order_in_db.external_id),
+                            template_name=template_name
+                        )
+                    else:
+                        print(f"⚠️ No template configured for status: {new_status}")
                 except Exception as e:
-                    print(f"❌ Failed to send WhatsApp for status update: {e}")
-            else:
-                print(f"⚠️ No WhatsApp template for status '{new_status}'")
+                    print(f"❌ WhatsApp send failed: {e}")
 
-    db.commit()
+        return
 
-def backfill_existing_orders(db: Session):
-    orders = db.query(Order).all()
+    order = Order(
+        order_key=data["order_key"],
+        customer_id=customer.id,
+        external_id=data["id"],
+        status=data["status"],
+        total_amount=float(data["total"]),
+        created_at=isoparse(data["date_created"]),
+        payment_method=data.get("payment_method_title"),
+        attribution_referrer=meta_dict.get("_wc_order_attribution_referrer"),
+        session_pages=int(meta_dict.get("_wc_order_attribution_session_pages", 0)),
+        session_count=int(meta_dict.get("_wc_order_attribution_session_count", 0)),
+        device_type=meta_dict.get("_wc_order_attribution_device_type")
+    )
+    db.add(order)
+    db.flush()
 
-    for order in orders:
-        print(f"Backfilling order: {order.external_id}")
-        # Fetch from API
-        url = f"{WC_BASE_URL}/{order.external_id}"
+    for item in data.get("line_items", []):
+        product = db.query(Product).filter_by(external_id=item["product_id"]).first()
+        product_id = product.external_id if product else None
+
+        order_item = OrderItem(
+            order_id=order.id,
+            product_name=item["name"],
+            product_id=product_id,
+            quantity=item["quantity"],
+            price=float(item["price"])
+        )
+        db.add(order_item)
+
+    if customer.phone:
         try:
-            with httpx.Client() as client:
-                response = client.get(url, auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET))
-            if response.status_code != 200:
-                print(f"Failed to fetch order {order.external_id}: {response.text}")
-                continue
+            full_name = f"{customer.first_name} {customer.last_name}".strip()
+            template_name = WHATSAPP_TEMPLATES.get(order.status)
 
-            data = response.json()
-            meta = {m["key"]: m["value"] for m in data.get("meta_data", [])}
-
-            order.attribution_referrer = meta.get("_wc_order_attribution_referrer")
-            order.session_pages = int(meta.get("_wc_order_attribution_session_pages", 0))
-            order.session_count = int(meta.get("_wc_order_attribution_session_count", 0))
-            order.device_type = meta.get("_wc_order_attribution_device_type")
-
+            if template_name:
+                send_whatsapp_template(
+                    phone_number=customer.phone,
+                    customer_name=full_name,
+                    order_number=str(order.external_id),
+                    template_name=template_name
+                )
+            else:
+                print(f"⚠️ No template configured for order status: {order.status}")
         except Exception as e:
-            print(f"Error updating order {order.external_id}: {e}")
-            continue
-
-    db.commit()
-    print("✅ Finished backfilling existing orders.")
-
-WHATSAPP_TEMPLATES = {
-    "processing": "order_processing",
-    "completed": "order_completed",
-    "cancelled": "order_cancelled",
-    "on-hold": "order_onhold",
-    "failed": "order_failed"
-    # Add more as needed
-}
+            print(f"❌ WhatsApp send failed: {e}")
 
 def fetch_and_save_orders(db: Session) -> None:
-    """Fetch recent WooCommerce orders and sync status or insert new ones."""
     print(f"[DB INFO] Connected to: {db.bind.url}")
 
     auth = (WC_CONSUMER_KEY, WC_CONSUMER_SECRET)
@@ -172,143 +233,56 @@ def fetch_and_save_orders(db: Session) -> None:
 
         try:
             for data in orders:
-                email = data["billing"].get("email") or None
-                raw_phone = data["billing"].get("phone") or None
-                phone = normalize_phone(raw_phone)
-
-                customer = None
-                if phone:
-                    customer = db.query(Customer).filter_by(phone=phone).first()
-                if not customer and email:
-                    customer = db.query(Customer).filter_by(email=email).first()
-
-                if not customer:
-                    customer = Customer(
-                        first_name=data["billing"].get("first_name", ""),
-                        last_name=data["billing"].get("last_name", ""),
-                        email=email,
-                        phone=phone,
-                    )
-                    db.add(customer)
-                    db.flush()
-
-                existing_address = db.query(Address).filter_by(
-                    customer_id=customer.id,
-                    address_1=data["billing"].get("address_1", ""),
-                    city=data["billing"].get("city", ""),
-                    postcode=data["billing"].get("postcode", "")
-                ).first()
-
-                if not existing_address:
-                    address = Address(
-                        customer_id=customer.id,
-                        company=data["billing"].get("company"),
-                        address_1=data["billing"].get("address_1"),
-                        address_2=data["billing"].get("address_2"),
-                        city=data["billing"].get("city"),
-                        state=data["billing"].get("state"),
-                        postcode=data["billing"].get("postcode"),
-                        country=data["billing"].get("country")
-                    )
-                    db.add(address)
-
-                order_in_db = db.query(Order).filter_by(order_key=data["order_key"]).first()
-
-                # Extract metadata
-                meta = data.get("meta_data", [])
-                meta_dict = {entry.get("key"): entry.get("value") for entry in meta}
-
-                if order_in_db:
-                    # Check for status change
-                    new_status = data["status"]
-                    updated = False
-
-                    if order_in_db.status != new_status:
-                        order_in_db.status = new_status
-                        updated = True
-
-                    new_payment_method = data.get("payment_method_title")
-                    if order_in_db.payment_method != new_payment_method:
-                        order_in_db.payment_method = new_payment_method
-                        updated = True
-
-                    # Update if changed
-                    if updated:
-                        db.add(order_in_db)
-                        db.flush()
-                        print(f"🔄 Updated order #{order_in_db.external_id} to status: {new_status}")
-
-                        if customer.phone:
-                            try:
-                                full_name = f"{customer.first_name} {customer.last_name}".strip()
-                                template_name = WHATSAPP_TEMPLATES.get(new_status)
-
-                                if template_name:
-                                    send_whatsapp_template(
-                                        phone_number=customer.phone,
-                                        customer_name=full_name,
-                                        order_number=str(order_in_db.external_id),
-                                        template_name=template_name
-                                    )
-                                else:
-                                    print(f"⚠️ No template configured for status: {new_status}")
-                            except Exception as e:
-                                print(f"❌ WhatsApp send failed: {e}")
-
-                    continue  # Skip to next if this order already existed
-
-                # If new order, create it
-                order = Order(
-                    order_key=data["order_key"],
-                    customer_id=customer.id,
-                    external_id=data["id"],
-                    status=data["status"],
-                    total_amount=float(data["total"]),
-                    created_at=isoparse(data["date_created"]),
-                    payment_method=data.get("payment_method_title"),
-                    attribution_referrer=meta_dict.get("_wc_order_attribution_referrer"),
-                    session_pages=int(meta_dict.get("_wc_order_attribution_session_pages", 0)),
-                    session_count=int(meta_dict.get("_wc_order_attribution_session_count", 0)),
-                    device_type=meta_dict.get("_wc_order_attribution_device_type")
-                )
-                db.add(order)
-                db.flush()
-
-                for item in data.get("line_items", []):
-                    product = db.query(Product).filter_by(external_id=item["product_id"]).first()
-                    product_id = product.external_id if product else None
-
-                    order_item = OrderItem(
-                        order_id=order.id,
-                        product_name=item["name"],
-                        product_id=product_id,
-                        quantity=item["quantity"],
-                        price=float(item["price"])
-                    )
-                    db.add(order_item)
-
-                # Send WhatsApp on new order
-                if customer.phone:
-                    try:
-                        full_name = f"{customer.first_name} {customer.last_name}".strip()
-                        template_name = WHATSAPP_TEMPLATES.get(order.status)
-
-                        if template_name:
-                            send_whatsapp_template(
-                                phone_number=customer.phone,
-                                customer_name=full_name,
-                                order_number=str(order.external_id),
-                                template_name=template_name
-                            )
-                        else:
-                            print(f"⚠️ No template configured for order status: {order.status}")
-                    except Exception as e:
-                        print(f"❌ WhatsApp send failed: {e}")
+                process_order_data(db, data)
 
             db.commit()
             print(f"✅ Committed page {page}")
         except Exception as e:
             db.rollback()
             print(f"❌ Error processing page {page}: {e}")
+
         page += 1
+
+def fetch_all_orders_once(db: Session) -> None:
+    print(f"[DB INFO] Starting full order fetch...")
+
+    auth = (WC_CONSUMER_KEY, WC_CONSUMER_SECRET)
+    per_page = 100
+    page = 1
+
+    while True:
+        url = f"{WC_BASE_URL}?per_page={per_page}&page={page}"
+        try:
+            with httpx.Client() as client:
+                response = client.get(url, auth=auth)
+        except Exception as e:
+            print(f"Exception while fetching orders: {e}")
+            break
+
+        if response.status_code != 200:
+            print(f"Error fetching orders: {response.text}")
+            break
+
+        orders = response.json()
+        if not orders:
+            print("No more orders to fetch.")
+            break
+
+        print(f"Processing page {page}, {len(orders)} orders")
+
+        try:
+            for data in orders:
+                process_order_data(db, data)
+
+            db.commit()
+            print(f"✅ Committed page {page}")
+        except Exception as e:
+            db.rollback()
+            print(f"❌ Error processing page {page}: {e}")
+            break
+
+        page += 1
+
+    latest_time = datetime.utcnow().isoformat() + "Z"
+    set_last_synced_time(db, latest_time)
 
