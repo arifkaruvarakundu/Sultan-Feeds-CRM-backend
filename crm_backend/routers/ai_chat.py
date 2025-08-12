@@ -72,12 +72,12 @@ CREATE TABLE products (
 }
 
 # Set up LangChain SQL agent
-# db = SQLDatabase.from_uri(
-#     DATABASE_URL,
-#     include_tables=["orders", "order_items", "customers", "products"],
-#     custom_table_info=CUSTOM_SCHEMA,
-#     sample_rows_in_table_info=3 # optional, gives LLM better context
-# )
+db = SQLDatabase.from_uri(
+    DATABASE_URL,
+    include_tables=["orders", "order_items", "customers", "products"],
+    custom_table_info=CUSTOM_SCHEMA,
+    sample_rows_in_table_info=3 # optional, gives LLM better context
+)
 llm = ChatGroq(temperature=0, model_name="compound-beta-mini", api_key=GROQ_API_KEY)
 
 examples_text = """
