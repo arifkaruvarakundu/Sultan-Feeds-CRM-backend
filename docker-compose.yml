@@ -6,8 +6,10 @@ services:
     container_name: postgres_db
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: harif313
       POSTGRES_DB: crm_db
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    secrets:
+      - pg_password
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
@@ -29,6 +31,24 @@ services:
       timeout: 5s
       retries: 5
 
+  migrate:
+    build: .
+    container_name: migrate
+    working_dir: /app/crm_backend
+    command: alembic upgrade head
+    volumes:
+      - .:/app
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://postgres:@postgres_db:5432/crm_db
+    depends_on:
+      postgres_db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    secrets:
+      - pg_password
+
   fastapi:
     build: .
     container_name: fastapi_app
@@ -39,7 +59,7 @@ services:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql://postgres:harif313@postgres_db:5432/crm_db
+      - DATABASE_URL=postgresql://postgres:@postgres_db:5432/crm_db
     depends_on:
       postgres_db:
         condition: service_healthy
@@ -54,7 +74,7 @@ services:
       - .:/app
     environment:
       - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql://postgres:harif313@postgres_db:5432/crm_db
+      - DATABASE_URL=postgresql://postgres:@postgres_db:5432/crm_db
     depends_on:
       postgres_db:
         condition: service_healthy
@@ -69,7 +89,7 @@ services:
       - .:/app
     environment:
       - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql://postgres:harif313@postgres_db:5432/crm_db
+      - DATABASE_URL=postgresql://postgres:@postgres_db:5432/crm_db
     depends_on:
       postgres_db:
         condition: service_healthy
@@ -78,3 +98,7 @@ services:
 
 volumes:
   pgdata:
+
+secrets:
+  pg_password:
+    external: true
