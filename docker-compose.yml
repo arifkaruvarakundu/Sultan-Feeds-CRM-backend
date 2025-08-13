@@ -44,9 +44,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks:
-     - backend
-
+    
   fastapi_app:
     build: .
     container_name: fastapi_app
@@ -65,9 +63,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks:
-      - backend
-
+    
   celery_worker:
     build: .
     container_name: celery_worker
@@ -82,9 +78,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks:
-      - backend
-
+    
   celery_beat:
     build: .
     container_name: celery_beat
@@ -99,9 +93,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks:
-      - backend
-
+    
   nginx:
     image: nginx:latest
     container_name: nginx
@@ -111,12 +103,8 @@ services:
       - "80:80"
     depends_on:
       - fastapi_app
-    networks:
-      - backend
-
+    
 volumes:
   pgdata:
 
-networks:
-  backend:
-    driver: bridge
+
