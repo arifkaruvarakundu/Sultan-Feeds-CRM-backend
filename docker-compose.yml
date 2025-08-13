@@ -104,7 +104,8 @@ services:
     image: nginx:latest
     container_name: nginx
     volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+      - ./nginx.conf:/etc/nginx/sites-available/fastapi_app
+      - /etc/nginx/sites-enabled:/etc/nginx/sites-enabled
     ports:
       - "80:80"
     depends_on:
