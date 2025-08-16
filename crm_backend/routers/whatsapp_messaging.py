@@ -24,6 +24,10 @@ class WhatsAppMessageRequest(BaseModel):
     to_number: str  # e.g. 201234567890 (no +)
     message: str
 
+def normalize_number(number: str) -> str:
+    """Remove + and leading zeros for consistent comparison."""
+    return number.lstrip("+").lstrip("0")
+
 @router.post("/webhook")
 async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     data = await request.json()
@@ -35,7 +39,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
 
     if messages:
         msg = messages[0]
-        from_number = msg.get("from")
+        from_number = normalize_number(msg.get("from", ""))
         body = msg.get("text", {}).get("body", "")
         timestamp = msg.get("timestamp", None)
         wa_msg_id = msg.get("id")
@@ -43,20 +47,25 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         if timestamp:
             timestamp = datetime.fromtimestamp(int(timestamp))
 
-        # 📌 Lookup customer by phone
-        customer = db.query(Customer).filter(Customer.phone.contains(from_number[-8:])).first()
-
-        if customer:
+        # Lookup customer using normalized number
+        customer = db.query(Customer).all()
+        matched_customer = None
+        for c in customer:
+            if normalize_number(c.phone).endswith(from_number[-8:]):
+                matched_customer = c
+                break
+        if matched_customer:
             db_msg = WhatsAppMessage(
-                customer_id=customer.id,
+                customer_id=matched_customer.id,
                 direction="incoming",
                 message=body,
                 timestamp=timestamp or datetime.utcnow(),
                 whatsapp_message_id=wa_msg_id,
-                status = None
+                status=None,
             )
             db.add(db_msg)
             db.commit()
+            
     
      # ✅ Handle message status updates (sent/delivered/read)
     if statuses:
@@ -185,4 +194,3 @@ def get_messages(phone: str, db: Session = Depends(get_db)):
         for m in messages
     ]
 
-# @router.get()
