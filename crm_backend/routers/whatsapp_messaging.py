@@ -31,12 +31,13 @@ def normalize_number(number: str) -> str:
 @router.post("/webhook")
 async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     data = await request.json()
-    print("📩 Webhook Received:", data)
+    print("📩 [WEBHOOK RECEIVED] Raw payload:", data)
 
     value = data.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {})
     messages = value.get("messages", [])
     statuses = value.get("statuses", [])
 
+    # ✅ Handle incoming messages
     if messages:
         msg = messages[0]
         from_number = normalize_number(msg.get("from", ""))
@@ -44,17 +45,21 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         timestamp = msg.get("timestamp", None)
         wa_msg_id = msg.get("id")
 
+        print(f"📨 [MESSAGE RECEIVED] from={from_number} text={body} id={wa_msg_id}")
+
         if timestamp:
             timestamp = datetime.fromtimestamp(int(timestamp))
 
-        # Lookup customer using normalized number
-        customer = db.query(Customer).all()
+        # Lookup customer
+        customers = db.query(Customer).all()
         matched_customer = None
-        for c in customer:
+        for c in customers:
             if normalize_number(c.phone).endswith(from_number[-8:]):
                 matched_customer = c
                 break
+
         if matched_customer:
+            print(f"✅ [CUSTOMER MATCHED] id={matched_customer.id} phone={matched_customer.phone}")
             db_msg = WhatsAppMessage(
                 customer_id=matched_customer.id,
                 direction="incoming",
@@ -65,19 +70,22 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             )
             db.add(db_msg)
             db.commit()
-            
-    
-     # ✅ Handle message status updates (sent/delivered/read)
+            print("💾 [DB SAVED] Incoming message stored")
+        else:
+            print("⚠️ [NO CUSTOMER MATCH] Could not match number:", from_number)
+
+    # ✅ Handle message status updates
     if statuses:
         status_event = statuses[0]
         wa_msg_id = status_event.get("id")
-        status_type = status_event.get("status")  # e.g., "delivered", "read"
+        status_type = status_event.get("status")
         timestamp = status_event.get("timestamp")
+
+        print(f"🔔 [STATUS UPDATE] id={wa_msg_id} status={status_type}")
 
         if timestamp:
             timestamp = datetime.fromtimestamp(int(timestamp))
 
-        # ✅ FIXED: Use whatsapp_message_id, not id
         db_msg = db.query(WhatsAppMessage).filter(
             WhatsAppMessage.whatsapp_message_id == wa_msg_id
         ).first()
@@ -86,19 +94,25 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             db_msg.status = status_type
             db_msg.timestamp = timestamp or db_msg.timestamp
             db.commit()
+            print("💾 [DB UPDATED] Status updated")
+        else:
+            print("⚠️ [STATUS UPDATE FAILED] No matching message found")
 
+    # ✅ Broadcast to WebSocket clients
     disconnected = []
     for conn in active_connections:
         try:
-            await conn.send_json(data)  # ✅ send entire webhook payload
+            await conn.send_json(data)
+            print("📡 [WS SENT] Payload pushed to client")
         except Exception as e:
-            print("❌ Failed to send to WebSocket:", e)
+            print("❌ [WS ERROR] Failed to send:", e)
             disconnected.append(conn)
 
     for conn in disconnected:
         active_connections.remove(conn)
 
     return {"status": "received"}
+
 
 # 🌐 Webhook GET (verification)
 @router.get("/webhook")
@@ -164,11 +178,20 @@ def send_message(data: WhatsAppMessageRequest, db: Session = Depends(get_db)):
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     active_connections.append(websocket)
+    print(f"🔌 [WS CONNECTED] Total clients: {len(active_connections)}")
+
     try:
         while True:
-            await asyncio.sleep(1)  # optional, can be ping
+            # Just keep connection alive
+            await asyncio.sleep(10)
     except WebSocketDisconnect:
         active_connections.remove(websocket)
+        print(f"❌ [WS DISCONNECTED] Total clients: {len(active_connections)}")
+    except Exception as e:
+        print(f"⚠️ [WS ERROR] {e}")
+        if websocket in active_connections:
+            active_connections.remove(websocket)
+
 
 @router.get("/whatsapp-messages", response_model=List[dict])
 def get_messages(phone: str, db: Session = Depends(get_db)):

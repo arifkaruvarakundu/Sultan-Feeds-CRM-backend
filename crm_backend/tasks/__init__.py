@@ -32,15 +32,15 @@ def fetch_products_task(*args, **kwargs):
 # def send_reminders_task(customer_ids: list):
 #     send_reorder_reminders_to_customers(customer_ids)
 
-# @shared_task(name="send_reminders_after_one_month_task")
-# def send_reminders_after_one_month_task():
-#     db = SessionLocal()
-#     try:
-#         send_whatsapp_message_after_one_month(db)
-#     except Exception as e:
-#         print(f"[ERROR] Failed to send reminders: {e}")
-#     finally:
-#         db.close()
+@shared_task(name="send_reminders_after_one_month_task")
+def send_reminders_after_one_month_task():
+    db = SessionLocal()
+    try:
+        send_whatsapp_message_after_one_month(db)
+    except Exception as e:
+        print(f"[ERROR] Failed to send reminders: {e}")
+    finally:
+        db.close()
 
 
 
