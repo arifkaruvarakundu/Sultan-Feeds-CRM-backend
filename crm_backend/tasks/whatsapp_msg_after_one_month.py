@@ -99,5 +99,3 @@ def send_whatsapp_message_after_one_month(db: Session):
                 phone_number, customer_name, "ar"
             )
             print(f"[AR] Sent to {customer_name} ({phone_number}): {status_ar} - {result_ar}")
-
-

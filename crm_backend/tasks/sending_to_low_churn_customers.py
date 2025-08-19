@@ -15,8 +15,8 @@ ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
 WHATSAPP_API_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 
-TEMPLATE_NAME = "product_forecast_offer"
-LANGUAGE_CODE = "en_US"
+# TEMPLATE_NAME = "product_forecast_offer"
+# LANGUAGE_CODE = "en_US"
 
 def helper_function_to_sending_message_to_low_churn_risk_customers(db: Session):
     low_churn_customers = function_get_customers_with_low_churnRisk(db)
@@ -42,49 +42,63 @@ def helper_function_to_sending_message_to_low_churn_risk_customers(db: Session):
 
     return todays_forecasts
 
-def send_to_low_churn_customers(todays_forecasts: pd.DataFrame):
-    headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type": "application/json"
+def send_whatsapp_forecast_message(phone_number: str, customer_name: str, language: str = "en"):
+    template_config = {
+        "en": {
+            "template_name": "example_for_quick_reply",
+            "language_code": "en_US",
+        },
+        "ar": {
+            "template_name": "order_management_1",
+            "language_code": "ar",
+        },
     }
 
-    for _, row in todays_forecasts.iterrows():
-        whatsapp_number = row["phone"]
+    config = template_config.get(language)
+    if not config:
+        raise ValueError("Unsupported language. Use 'en' or 'ar'.")
 
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": whatsapp_number,
-            "type": "template",
-            "template": {
-                "name": TEMPLATE_NAME,
-                "language": { "code": LANGUAGE_CODE },
-                "components": [
-                    {
-                        "type": "body",
-                        "parameters": [
-                            { "type": "text", "text": row["customer_name"] },
-                            { "type": "text", "text": row["product_name"] },
-                            { "type": "text", "text": "10" }
-                        ]
-                    }
-                ]
-            }
-        }
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
 
-        response = requests.post(WHATSAPP_API_URL, headers=headers, json=payload)
-        if response.status_code == 200:
-            print(f"✅ Sent template to {row['customer_name']} ({whatsapp_number})")
-        else:
-            print(f"❌ Failed for {row['customer_name']}: {response.text}")
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone_number,
+        "type": "template",
+        "template": {
+            "name": config["template_name"],
+            "language": {"code": config["language_code"]},
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [{"type": "text", "text": customer_name}],
+                }
+            ],
+        },
+    }
 
-# if __name__ == "__main__":
+    response = requests.post(WHATSAPP_API_URL, headers=headers, json=payload)
+    return response.status_code, response.json()
+
+# def send_forecast_messages_task():
+#     """Celery task to send forecast-based WhatsApp messages."""
 #     db = next(get_db())
 #     todays_forecasts = helper_function_to_sending_message_to_low_churn_risk_customers(db)
-#     # if not todays_forecasts.empty:
-#     #     send_to_low_churn_customers(todays_forecasts)
-#     if not todays_forecasts.empty:
-#         print("📋 Today's forecasted customers & products:")
-#         for _, row in todays_forecasts.iterrows():
-#             print(f"Customer: {row['customer_name']} | Product: {row['product_name']}")
-#     else:
-#         print("No forecasts to send today.")
+
+#     if todays_forecasts.empty:
+#         print("📭 No forecasted purchases today.")
+#         return
+
+#     for _, row in todays_forecasts.iterrows():
+#         phone_number = row["phone"]
+#         customer_name = row["customer_name"]
+
+#         # English message
+#         status_en, result_en = send_whatsapp_forecast_message(phone_number, customer_name, "en")
+#         print(f"[EN] Sent to {customer_name} ({phone_number}): {status_en} - {result_en}")
+
+#         # Arabic message
+#         status_ar, result_ar = send_whatsapp_forecast_message(phone_number, customer_name, "ar")
+#         print(f"[AR] Sent to {customer_name} ({phone_number}): {status_ar} - {result_ar}")

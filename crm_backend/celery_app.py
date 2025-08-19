@@ -5,7 +5,7 @@ from celery.schedules import crontab
 
 load_dotenv()
 
-REDIS_BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+REDIS_BROKER_URL = os.getenv("REDIS_URL", "redis://:${REDIS_PASSWORD}@redis:6379/0")
 
 celery = Celery(
     "crm_tasks",
