@@ -162,8 +162,6 @@ def get_customer_info(customer_id):
 #     return list(customer_forecasts.keys())
 
 #using Avearage gap prediction(AGP)
-from datetime import date, timedelta
-import pandas as pd
 
 def predict_customers_to_remind(df, orders_df, target_date=None, last_reminded=None):
     """
@@ -224,36 +222,47 @@ def send_reorder_reminders_to_customers(customer_ids: list):
     """
     for customer_id in customer_ids:
         customer = get_customer_info(customer_id)
-        if customer and customer.phone:
-            full_name = f"{customer.first_name} {customer.last_name}".strip()
-            phone_number = customer.phone
+        if not customer or not customer.phone:
+            print(f"⚠️ Skipping customer {customer_id}: No phone number.")
+            continue
 
-            print(f"📤 Sending to {full_name} ({phone_number}) [ID: {customer_id}]")
+        full_name = f"{customer.first_name} {customer.last_name}".strip()
+        phone_number = format_kuwait_number(customer.phone)
 
-            try:
-                # Send English message
-                send_whatsapp_reorder_reminder(
-                    phone_number=phone_number,
-                    customer_name=full_name,
-                    language="en"
-                )
-                print(f"✅ English message sent to {phone_number}")
-                time.sleep(1)
-                # Send Arabic message
-                send_whatsapp_reorder_reminder(
-                    phone_number=phone_number,
-                    customer_name=full_name,
-                    language="ar"
-                )
-                print(f"✅ Arabic message sent to {phone_number}")
+        # Validate after formatting
+        if not phone_number or len(phone_number) != 11 or not phone_number.startswith("965"):
+            print(f"❌ Skipping {full_name} (ID: {customer_id}): Invalid Kuwait phone number '{customer.phone}' → '{phone_number}'")
+            continue
 
-            except Exception as e:
-                print(f"❌ Failed to send message(s) to {customer_id}: {e}")
+        print(f"📤 Sending to {full_name} ({phone_number}) [ID: {customer_id}]")
+
+        try:
+            # Send English message
+            send_whatsapp_reorder_reminder(
+                phone_number=phone_number,
+                customer_name=full_name,
+                language="en"
+            )
+            print(f"✅ English message sent to {phone_number}")
+            time.sleep(1)
+
+            # Send Arabic message
+            send_whatsapp_reorder_reminder(
+                phone_number=phone_number,
+                customer_name=full_name,
+                language="ar"
+            )
+            print(f"✅ Arabic message sent to {phone_number}")
+
+        except Exception as e:
+            print(f"❌ Failed to send message(s) to {customer_id}: {e}")
 
 def run_reorder_prediction_task():
+    
     """
     Combines prediction and message sending.
     """
+    
     customer_ids = predict_customers_to_remind()
     send_reorder_reminders_to_customers(customer_ids)
     

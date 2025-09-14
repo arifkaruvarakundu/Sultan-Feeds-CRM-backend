@@ -4,14 +4,18 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 import requests
 import os
+import re
 from fastapi import WebSocket
 from fastapi.websockets import WebSocketDisconnect
 import asyncio
 from sqlalchemy.orm import Session
-from crm_backend.models import WhatsAppMessage, Customer
+from crm_backend.models import WhatsAppMessage, Customer, WhatsAppTemplate
 from crm_backend.database import get_db
 from datetime import datetime
 from typing import List
+from crm_backend.schemas.templates import SendMessageRequest
+from crm_backend.tasks.send_whatsapp import send_whatsapp_template_message
+from crm_backend.tasks.reorder_messaging import format_kuwait_number
 
 active_connections = []
 
@@ -217,3 +221,155 @@ def get_messages(phone: str, db: Session = Depends(get_db)):
         for m in messages
     ]
 
+def fill_template(body: str, values: list[str] | None = None) -> str:
+    """
+    Replace numbered placeholders {{1}}, {{2}}, ... with provided values.
+    """
+    message = body
+    if values:
+        for idx, val in enumerate(values, start=1):
+            message = re.sub(rf"{{{{{idx}}}}}", str(val), message)
+    return message
+
+# @router.post("/send-message-to-each-customer")
+# def send_message(data: SendMessageRequest):
+#     if not data.customers:
+#         raise HTTPException(status_code=400, detail="No customers selected")
+#     if not data.templates:
+#         raise HTTPException(status_code=400, detail="No templates selected")
+
+#     target_customers = [c for c in CUSTOMERS_DB if c["id"] in data.customers]
+#     if not target_customers:
+#         raise HTTPException(status_code=404, detail="No valid customers found")
+
+#     messages = []
+#     for customer in target_customers:
+#         for template in data.templates:
+#             values = data.variables.get(customer["id"], []) if data.variables else []
+#             filled = fill_template(template.body, values)
+#             msg = {
+#                 "to": customer["phone"],
+#                 "name": customer["name"],
+#                 "template": template.template_name,
+#                 "message": filled,
+#             }
+#             messages.append(msg)
+
+#             # 👉 Replace this with actual send logic (Twilio, WhatsApp API, etc.)
+#             print(f"Sending to {customer['phone']}: {filled}")
+
+#     return {
+#         "status": "success",
+#         "sent": len(messages),
+#         "messages": messages,
+#     }
+
+TEMPLATE_VARIABLE_MAPPING = {
+    "order_delivered": ["full_name", "external_id"],
+    "delivery_confirmation_2": ["full_name", "external_id"],
+    "dead_customers_message": ["full_name"],
+    "dead_customer_message_ar": ["full_name"],
+    "example_for_quick_reply": ["full_name"],
+    "order_onhold": ["full_name", "external_id"],
+    "order_management_1": ["full_name"]
+}
+
+def customer_to_dict(customer: Customer) -> dict:
+    """Convert SQLAlchemy Customer object into a dict with customer + latest order fields (no address)."""
+    data = {
+        "id": customer.id,
+        "first_name": customer.first_name,
+        "last_name": customer.last_name,
+        "full_name": f"{customer.first_name} {customer.last_name}",
+        "email": customer.email,
+        "phone": customer.phone,
+    }
+
+    # Include the latest order (if exists)
+    if customer.orders:
+        latest_order = sorted(customer.orders, key=lambda o: o.created_at, reverse=True)[0]
+        data.update({
+            "external_id": latest_order.external_id,
+            "order_status": latest_order.status,
+            "order_total": latest_order.total_amount,
+        })
+
+    return data
+
+def get_template_variables(cust_dict: dict, template_name: str) -> list[str]:
+    """
+    Returns a list of values for a template.
+    If a field is missing in cust_dict, replaces with empty string.
+    """
+    fields = TEMPLATE_VARIABLE_MAPPING.get(template_name, [])
+    values = [str(cust_dict.get(f, "")) for f in fields]
+    return values
+
+@router.post("/send-message-to-each-customer")
+def send_message(data: SendMessageRequest, db: Session = Depends(get_db)):
+
+    print("📩 API /send-message-to-each-customer was called!")
+    print("Received payload:", data.dict())
+
+    if not data.customers:
+        raise HTTPException(status_code=400, detail="No customers selected")
+    if not data.templates:
+        raise HTTPException(status_code=400, detail="No templates selected")
+
+    # Fetch customers from DB
+    target_customers = db.query(Customer).filter(Customer.id.in_(data.customers)).all()
+    if not target_customers:
+        raise HTTPException(status_code=404, detail="No valid customers found")
+
+    # Fetch templates
+    db_templates = db.query(WhatsAppTemplate).filter(
+        WhatsAppTemplate.template_name.in_(data.templates)
+    ).all()
+    if not db_templates:
+        raise HTTPException(status_code=404, detail="No valid templates found")
+
+    messages = []
+
+    for customer in target_customers:
+        cust_dict = customer_to_dict(customer)
+
+        for tpl in db_templates:
+            # Numbered placeholders via mapping
+            # numbered_fields = TEMPLATE_VARIABLE_MAPPING.get(tpl.template_name, [])
+            # numbered_values = get_template_variables(cust_dict, tpl.template_name)
+            placeholder_count = len(tpl.variables)
+
+            # get field names from mapping (fallback)
+            field_names = TEMPLATE_VARIABLE_MAPPING.get(tpl.template_name, [])
+
+            # build values based on detected placeholder count
+            numbered_values = []
+            for i in range(placeholder_count):
+                if i < len(field_names):
+                    field = field_names[i]
+                    numbered_values.append(str(cust_dict.get(field, "")))
+                else:
+                    # fallback if mapping missing
+                    numbered_values.append("")
+            # ✅ validation (skip if all values are empty)
+            if not any(v.strip() for v in numbered_values):
+                print(f"⚠️ Skipping {tpl.template_name} for {cust_dict['id']} - no valid variables")
+                continue
+
+            formatted_phone = format_kuwait_number(cust_dict["phone"])
+
+            # Send via WhatsApp template API
+            msg_response = send_whatsapp_template_message(
+                to=formatted_phone,
+                template_name=tpl.template_name,
+                variables=numbered_values,
+                language=tpl.language
+            )
+            messages.append(msg_response)
+            print(f"Sent to {cust_dict['phone']}: {numbered_values}")
+
+    return {
+            "status": "success",
+            "sent": len(messages),
+            "messages": messages,
+        }    

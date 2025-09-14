@@ -52,7 +52,18 @@ celery.conf.beat_schedule = {
       "send-whatsapp-after-one-month":{
         "task": "send_reminders_after_one_month_task",
         "schedule": crontab(hour=10, minute=0)
-      }
+      },
+      # sending message after one month from the order date
+    #   "send-whatsapp-to-low-churn-customers":{
+    #     "task": "send_forecast_messages_to_low_churn_task",
+    #     "schedule": crontab(hour=10, minute=0)
+    #   }
+    
+    # 📲 Send WhatsApp messages to DEAD customers once a month
+    # "send-dead-customers-messages-monthly": {
+    #     "task": "send_dead_customers_messages",
+    #     "schedule": crontab(minute=0, hour=10, day_of_month="1"),
+    # },
 
 }
 

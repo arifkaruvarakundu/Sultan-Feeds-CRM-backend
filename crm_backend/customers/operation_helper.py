@@ -148,6 +148,7 @@ def classify_spending(total_spent):
         return "VIP"
 
 def segment_customers_kmeans(df, today):
+    
     """
     Apply KMeans clustering based on order count and recency.
 
@@ -158,6 +159,7 @@ def segment_customers_kmeans(df, today):
     Returns:
         DataFrame: Modified DataFrame with a 'segment' column.
     """
+
     df["recency_days"] = df["last_order_date"].apply(
         lambda d: (today - d).days if pd.notnull(d) else 999
     )
@@ -238,5 +240,17 @@ def function_get_customers_with_low_churnRisk(db):
     
     return low_churn_customers
 
+def function_get_dead_customers(db):
+    """
+    Extract customers classified as 'Dead'.
 
+    Args:
+        db: Database connection/session.
 
+    Returns:
+        list: Customers with classification = 'Dead'.
+    """
+    all_customers = function_get_full_customer_classification(db)
+    dead_customers = [c for c in all_customers if c["classification"] == "Dead"]
+    
+    return dead_customers

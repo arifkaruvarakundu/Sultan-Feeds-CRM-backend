@@ -1,7 +1,7 @@
 # main.py
 import os
 from fastapi import FastAPI
-from crm_backend.routers import sync, auth, orders, products, customers, ai_chat, whatsapp_messaging, forecast_api
+from crm_backend.routers import sync, auth, orders, products, customers, ai_chat, whatsapp_messaging, forecast_api, csv_analysis
 import redis
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,9 +12,10 @@ app = FastAPI()
 
 # CORS configuration
 origins = [
-    "https://sultan-feeds-crm-frontend-git-main-muhammed-harifs-projects.vercel.app",
+    # "https://sultan-feeds-crm-frontend-git-main-muhammed-harifs-projects.vercel.app",
+    # "https://sultan-feeds-crm-frontend-47i3qtslm-muhammed-harifs-projects.vercel.app/",
     "http://localhost:5173",  # your frontend
-    "http://localhost:5173/"
+    "http://localhost:5173/",
     "http://127.0.0.1:5173",
 ]
 
@@ -40,6 +41,7 @@ app.include_router(customers.router)
 app.include_router(ai_chat.router)
 app.include_router(whatsapp_messaging.router)
 app.include_router(forecast_api.router)
+app.include_router(csv_analysis.router)
 
 @app.get("/")
 def read_root():

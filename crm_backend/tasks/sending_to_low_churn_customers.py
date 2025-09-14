@@ -43,6 +43,7 @@ def helper_function_to_sending_message_to_low_churn_risk_customers(db: Session):
     return todays_forecasts
 
 def send_whatsapp_forecast_message(phone_number: str, customer_name: str, language: str = "en"):
+    
     template_config = {
         "en": {
             "template_name": "example_for_quick_reply",
@@ -82,23 +83,3 @@ def send_whatsapp_forecast_message(phone_number: str, customer_name: str, langua
     response = requests.post(WHATSAPP_API_URL, headers=headers, json=payload)
     return response.status_code, response.json()
 
-# def send_forecast_messages_task():
-#     """Celery task to send forecast-based WhatsApp messages."""
-#     db = next(get_db())
-#     todays_forecasts = helper_function_to_sending_message_to_low_churn_risk_customers(db)
-
-#     if todays_forecasts.empty:
-#         print("📭 No forecasted purchases today.")
-#         return
-
-#     for _, row in todays_forecasts.iterrows():
-#         phone_number = row["phone"]
-#         customer_name = row["customer_name"]
-
-#         # English message
-#         status_en, result_en = send_whatsapp_forecast_message(phone_number, customer_name, "en")
-#         print(f"[EN] Sent to {customer_name} ({phone_number}): {status_en} - {result_en}")
-
-#         # Arabic message
-#         status_ar, result_ar = send_whatsapp_forecast_message(phone_number, customer_name, "ar")
-#         print(f"[AR] Sent to {customer_name} ({phone_number}): {status_ar} - {result_ar}")

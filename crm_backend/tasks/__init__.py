@@ -6,6 +6,8 @@ from crm_backend.database import SessionLocal
 from crm_backend.tasks.reorder_messaging import predict_customers_to_remind, send_reorder_reminders_to_customers
 from crm_backend.tasks.whatsapp_msg_after_one_month import send_whatsapp_message_after_one_month
 from crm_backend.tasks.sending_to_low_churn_customers import helper_function_to_sending_message_to_low_churn_risk_customers, send_whatsapp_forecast_message
+from crm_backend.customers.operation_helper import function_get_dead_customers
+from crm_backend.tasks.sending_to_dead_customers import send_whatsapp_dead_customer_message
 
 @celery.task(name="fetch_orders_task")
 def fetch_orders_task(*args, **kwargs):
@@ -71,5 +73,46 @@ def send_forecast_messages_to_low_churn_task():
     finally:
         db.close()
 
+@shared_task(name="send_dead_customers_messages")
+def send_dead_customers_messages():
+    """
+    Celery task to send WhatsApp messages (English + Arabic) 
+    to all dead customers in one execution.
+    """
+    db = SessionLocal()
+    results = []
 
-    
+    try:
+        dead_customers = function_get_dead_customers(db)
+
+        for customer in dead_customers:
+            phone = customer.get("phone")
+            if not phone:
+                results.append({
+                    "customer_id": customer["customer_id"],
+                    "status": "Failed - No phone"
+                })
+                continue
+
+            customer_results = {"customer_id": customer["customer_id"], "statuses": {}}
+
+            # Send English + Arabic
+            for lang in ["en", "ar"]:
+                try:
+                    status_code, resp = send_whatsapp_dead_customer_message(
+                        phone_number=phone,
+                        customer_name=customer["customer_name"],
+                        language=lang,
+                    )
+                    customer_results["statuses"][lang] = (
+                        "Success" if status_code == 200 else f"Failed - {resp}"
+                    )
+                except Exception as e:
+                    customer_results["statuses"][lang] = f"Failed - {str(e)}"
+
+            results.append(customer_results)
+
+    finally:
+        db.close()
+
+    return results

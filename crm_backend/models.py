@@ -4,6 +4,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
+import re
 
 Base = declarative_base()
 
@@ -117,3 +118,20 @@ class WhatsAppMessage(Base):
 
     # 🔙 Relationship back to customer
     customer = relationship("Customer", back_populates="whatsapp_messages")
+
+class WhatsAppTemplate(Base):
+    __tablename__ = "whatsapp_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    template_name = Column(String, unique=True, index=True, nullable=False)
+    category = Column(String(100))
+    language = Column(String(10))
+    status = Column(String(50))
+    body = Column(Text)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    @property
+    def variables(self) -> list[str]:
+        return re.findall(r"{{.*?}}", self.body or "")
+
+
