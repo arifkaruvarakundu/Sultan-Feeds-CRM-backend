@@ -3,3 +3,7 @@ venv
 __pycache__/
 *.pyc
 celerybeat-schedule
+certbot/
+certbot_backup
+db_backup.sql
+nginx.conf
