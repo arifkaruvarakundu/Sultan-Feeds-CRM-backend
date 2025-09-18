@@ -86,22 +86,6 @@ services:
   #     redis:
   #       condition: service_healthy
 
-  # fastapi_prod:
-  #   build: .
-  #   container_name: fastapi_prod
-  #   environment:
-  #     - APP_ENV=prod
-  #     - REDIS_URL=${REDIS_URL}
-  #     - DATABASE_URL=${DATABASE_URL}
-  #     - OPENAI_API_KEY=${OPENAI_API_KEY}
-  #   ports:
-  #     - "8001:8000"
-  #   depends_on:
-  #     postgres_db:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_healthy
-
   celery_worker:
     build: .
     container_name: celery_worker

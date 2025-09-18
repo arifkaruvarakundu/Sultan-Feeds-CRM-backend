@@ -1,3 +1,4 @@
+from http.client import HTTPException
 from fastapi import Request, APIRouter, Query, Depends
 from fastapi.responses import PlainTextResponse, JSONResponse
 from pydantic import BaseModel
