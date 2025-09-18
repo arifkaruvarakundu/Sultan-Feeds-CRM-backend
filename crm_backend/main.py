@@ -12,13 +12,9 @@ app = FastAPI()
 
 # CORS configuration
 origins = [
-    "https://crm.souqalsultan.com/",
+    "https://crm.souqalsultan.com",
     "https://sultan-feeds-crm-frontend-git-main-muhammed-harifs-projects.vercel.app",
-    "https://sultan-feeds-crm-frontend-47i3qtslm-muhammed-harifs-projects.vercel.app/",
-    "http://localhost:5173",  # your frontend
-    "http://localhost:5173/",
-    "http://127.0.0.1:5173",
-    "http://localhost:5174/",
+    "http://localhost:5173", 
     "http://localhost:5174"
 ]
 
